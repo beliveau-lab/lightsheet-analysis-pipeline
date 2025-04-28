@@ -1,13 +1,13 @@
 # Input/Output
 input_dir: "/net/beliveau/vol2/instrument/E9.5_225/Zoom_225"  
 input_xml: "/net/beliveau/vol2/instrument/E9.5_225/Zoom_225/Zoom_225_processed_writable.xml"
-# BigStitcher-Spark settings
+
+# BigStitcher-Spark location
 bigstitcher_script_dir: "/net/beliveau/vol1/project/BigStitcher-Spark"
 
 # Stitching parameters
 stitching_channel: 2  # Channel to use for stitching
 min_correlation: 0.7  # Minimum correlation threshold for stitching
-
 
 # Fusion parameters
 channels: [0,1,2]  # List of channels to process
@@ -32,7 +32,6 @@ cluster:
   project: "beliveaulab"  # Add additional projects as needed
   queue: "beliveau-long.q"    # Optional: specify queue name
 
-
 # Dask configuration
 dask:
   log_dir: "/net/beliveau/vol1/project/VB_Segmentation/subprojects/OTLS-Analyzer/logs"
@@ -56,16 +55,15 @@ dask:
 
 # Segmentation parameters
 segmentation:
-  script: "segmentation/segment_fused_image_alternative.py"
   output_suffix: "_segmented_normalized.zarr"
   block_size: "512,512,512" # Example
   eval_kwargs: "{'anisotropy': 1, 'do_3D': True, 'cellprob_threshold': -1, 'batch_size': 128, 'flow_threshold': 0.4, 'normalize': False, 'min_size': 4000}" # Example
   cellpose_model_path: "/net/beliveau/vol1/project/VB_Segmentation/subprojects/Tissue_Segmentation_Revisited/models/cellpose_otls/otls_r5"
   n5_channel_path: "ch2/s0" # Define the path within N5 for segmentation input
 
+# Feature extraction parameters
 feature_extraction:
   channels: [0,1,2]
-  script: "feature_extraction/distributed_feature_extraction.py"
   n5_path_pattern: "ch{}/s0" # Pattern for N5 channels for feature extraction
   chunk_size: "768,768,768"  # Core chunk size for feature extraction
   overlap: "128,128,128"        # Overlap for feature extraction

@@ -430,7 +430,7 @@ rule segmentation:
         gpu_queue=config["dask"]["gpu_queue"],
         gpu_processes=config["dask"]["gpu_processes"]
     conda:
-        "dask-cellpose"
+        "/net/beliveau/vol1/project/bigly_conda/miniconda3/envs/dask-cellpose"
     script:
         "scripts/segmentation.py"
 
@@ -462,6 +462,6 @@ rule feature_extraction:
         resource_spec=config["dask"].get("cpu_resource_spec", "mfree=60G"),
         processes=config["dask"].get("cpu_processes", 2)
     conda:
-        "dask-cellpose"
+        "/net/beliveau/vol1/project/bigly_conda/miniconda3/envs/dask-cellpose"
     script:
         "scripts/feature_extraction.py"
