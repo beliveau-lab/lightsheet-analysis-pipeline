@@ -123,10 +123,9 @@ After segmentation, this step measures various properties (features) of the segm
 
 -   `feature_extraction`: Container for feature extraction settings.
     -   `channels`: List of channels from which to extract features for each segmented object.
-    -   `script`: Path to the Python script performing the feature extraction.
     -   `n5_path_pattern`: A template defining how to access data for different channels within the N5/Zarr file (e.g., "ch{}/s0", where {} is replaced by the channel number).
-    -   `chunk_size`: The core size of the data chunks processed during feature extraction (X, Y, Z).
-    -   `overlap`: The amount of overlap (in pixels: X, Y, Z) between adjacent processing chunks to ensure features are calculated correctly near chunk boundaries.
+    -   `batch_size`: Number of cells to process in a single batch (to control peak memory usage)
+
 
 <h2> Running the Pipeline </h2>
 
