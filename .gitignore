@@ -17,3 +17,4 @@ launch_gpu_workers.py
 alignment
 *__pycache__*
 *.npy
+dev/

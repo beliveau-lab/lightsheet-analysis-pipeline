@@ -70,17 +70,24 @@ def get_intermediate_xml(base_xml, stage_suffix):
 
 rule all:
     input:
-        config["input_dir"] + "/dataset_fused_features_chunk_{params.chunk_size_str}_overlap_{params.overlap_str}.csv"
-    params:
-        chunk_size_str = config["feature_extraction"]["chunk_size"].replace(",", "_"), # e.g., "768_768_768"
-        overlap_str = config["feature_extraction"]["overlap"].replace(",", "_"),     # e.g., "128_128_128"
+        config["input_dir"] + "/dataset_fused_features.csv"
 
-rule pairwise_stitching:
+rule reorient_sample:
     input:
         xml=XML_FILE
     output:
+        xml=config["reorient_sample"]["output_xml"]
+    conda:
+        "dask-cellpose"
+    script:
+        "scripts/reorient_sample.py"
+
+rule pairwise_stitching:
+    input:
+        xml=config["reorient_sample"]["output_xml"]
+    output:
         done=config["input_dir"] + "/pairwise.done",
-        stitched_xml=os.path.splitext(config["input_xml"])[0]+'_pairwise.xml'
+        stitched_xml=os.path.splitext(config["reorient_sample"]["output_xml"])[0]+'_pairwise.xml'
     params:
         outdir=lambda w, output: os.path.dirname(output.done),
         script_dir=config["bigstitcher_script_dir"],
@@ -293,7 +300,7 @@ rule solver:
 
 rule affine_fusion:
     input:
-        xml=os.path.splitext(config["input_xml"])[0]+'_solved.xml',
+        xml=ancient(os.path.splitext(config["input_xml"])[0]+'_solved.xml'),
         solved=config["input_dir"] + "/solved.done"
     output:
         n5=directory(config["input_dir"] + "/dataset_fused.n5"),
@@ -414,7 +421,6 @@ rule segmentation:
         zarr=directory(config["input_dir"] + "/dataset_fused" + config["segmentation"]["output_suffix"])
     params:
         outdir=lambda w, output: os.path.dirname(output.zarr),
-        script=config["segmentation"]["script"],
         n5_channel_path=config["segmentation"].get("n5_channel_path", "ch0/s0"),
         block_size=config["segmentation"]["block_size"],
         model_path=config["segmentation"]["cellpose_model_path"],
@@ -430,7 +436,7 @@ rule segmentation:
         gpu_queue=config["dask"]["gpu_queue"],
         gpu_processes=config["dask"]["gpu_processes"]
     conda:
-        "/net/beliveau/vol1/project/bigly_conda/miniconda3/envs/dask-cellpose"
+        "dask-cellpose"
     script:
         "scripts/segmentation.py"
 
@@ -440,17 +446,13 @@ rule feature_extraction:
         n5=config["input_dir"] + "/dataset_fused.n5",
         zarr=config["input_dir"] + "/dataset_fused" + config["segmentation"]["output_suffix"]
     output:
-        csv=config["input_dir"] + "/dataset_fused_features_chunk_{params.chunk_size_str}_overlap_{params.overlap_str}.csv"
+        csv=config["input_dir"] + "/dataset_fused_features.csv"
     params:
         outdir=lambda w, output: os.path.dirname(output.csv),
-        script=config["feature_extraction"]["script"],
-        log_dir=config["dask"].get("log_dir", "./dask_worker_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}/"),
+        log_dir=config["dask"].get("log_dir") + "/dask_worker_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}/",
         n5_path_pattern=config["feature_extraction"].get("n5_path_pattern", "ch{}/s0"),
         channels=config["feature_extraction"].get("channels", "0"),
-        chunk_size=config["feature_extraction"].get("chunk_size", "256,256,256"),
-        overlap=config["feature_extraction"].get("overlap", "64,64,64"),
-        chunk_size_str = config["feature_extraction"]["chunk_size"].replace(",", "_"), # e.g., "768_768_768"
-        overlap_str = config["feature_extraction"]["overlap"].replace(",", "_"),     # e.g., "128_128_128"
+        batch_size=config["feature_extraction"].get("batch_size", 10000),
     resources:
         # Resources for the Snakemake job submission
         runtime=config["dask"].get("runtime", "1400000"), # Example runtime
@@ -462,6 +464,6 @@ rule feature_extraction:
         resource_spec=config["dask"].get("cpu_resource_spec", "mfree=60G"),
         processes=config["dask"].get("cpu_processes", 2)
     conda:
-        "/net/beliveau/vol1/project/bigly_conda/miniconda3/envs/dask-cellpose"
+        "dask-cellpose"
     script:
         "scripts/feature_extraction.py"

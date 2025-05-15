@@ -5,8 +5,12 @@ import logging
 import dask
 import distributed
 import dask_jobqueue
+import psutil
+
 
 logger = logging.getLogger(__name__)
+
+
 
 def setup_dask_sge_cluster(
     n_workers: int,
@@ -44,15 +48,16 @@ def setup_dask_sge_cluster(
 
     # --- Dask Configuration ---
     dask_config_defaults = {
-        'temporary-directory': os.environ.get('TMPDIR', '/tmp'), # Use TMPDIR if set
+        'temporary-directory': os.environ.get('TMPDIR', None), # Use TMPDIR if set
         'distributed.comm.timeouts.connect': '180s',
         'distributed.comm.timeouts.tcp': '360s',
+        "distributed.worker.memory.spill": 0.70,
         "distributed.worker.memory.pause": 0.90,
         "distributed.worker.memory.terminate": 0.98,
         "distributed.scheduler.work-stealing": True,
-        "distributed.scheduler.worker-saturation":  1.0,
+        "distributed.scheduler.worker-saturation":  1.1,
         # Set nanny pre-spawn env variable if needed
-        # "distributed.nanny.pre-spawn-environ.MALLOC_TRIM_THRESHOLD_": 0
+        #"distributed.nanny.pre-spawn-environ.MALLOC_TRIM_THRESHOLD_": 0
     }
     # Allow overriding defaults via kwargs
     dask_config = {**dask_config_defaults, **kwargs.pop('dask_config', {})}
@@ -69,6 +74,10 @@ def setup_dask_sge_cluster(
     prologue = []
     if conda_env:
         prologue.append(f'conda activate {conda_env}')
+        prologue.append(f'export OMP_NUM_THREADS=1')
+        prologue.append(f'export MKL_NUM_THREADS=1')
+        prologue.append(f'export OPENBLAS_NUM_THREADS=1')
+        prologue.append(f'export MALLOC_TRIM_THRESHOLD_=0')
     prologue.append(f'echo "Worker started on $(hostname) at $(date)"')
 
     # --- SGE PE Handling ---
@@ -77,7 +86,7 @@ def setup_dask_sge_cluster(
     # Example: If PE 'smp' controls cores: job_extra_directives=['-pe smp ' + str(cores)]
     # If PE is not used for cores, dask handles it via --nthreads.
     sge_pe_name = 'serial' # Assuming 'serial' PE controls memory or other non-core resources
-    job_extra = [f'-P {project}']
+    job_extra = [f'-P {project} -pe serial {cores}']
     if resource_spec:
         # If resource_spec requests cores (e.g., 'gpgpu=1'), PE might be needed
         job_extra.append(f'-l {resource_spec}')
@@ -87,6 +96,7 @@ def setup_dask_sge_cluster(
     logger.info(f"Using project: {project}, queue: {queue}")
     logger.info(f"Requesting {cores} cores, {processes} processes, {memory} memory per worker.")
     logger.info(f"Job extra directives: {job_extra}")
+
 
     # --- Create Cluster ---
     cluster = dask_jobqueue.SGECluster(

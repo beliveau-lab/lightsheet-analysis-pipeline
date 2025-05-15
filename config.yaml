@@ -1,6 +1,11 @@
 # Input/Output
-input_dir: "/net/beliveau/vol2/instrument/E9.5_225/Zoom_225"  
-input_xml: "/net/beliveau/vol2/instrument/E9.5_225/Zoom_225/Zoom_225_processed_writable.xml"
+input_dir: "/net/beliveau/vol2/instrument/E9.5_287/Zoom_287"  
+input_xml: "/net/beliveau/vol2/instrument/E9.5_287/Zoom_287/Zoom_287_processed_writable.xml"
+
+# Sample reorientation parameters 
+reorient_sample:
+  output_xml: "/net/beliveau/vol2/instrument/E9.5_287/Zoom_287/Zoom_287_processed_writable.xml"
+
 
 # BigStitcher-Spark location
 bigstitcher_script_dir: "/net/beliveau/vol1/project/BigStitcher-Spark"
@@ -47,11 +52,11 @@ dask:
   
   cpu_project: "beliveaulab"
   cpu_queue: "beliveau-long.q"
-  num_cpu_workers: 24
-  cpu_cores: 2
-  cpu_memory: "60G"
-  cpu_resource_spec: "mfree=60G"
-  cpu_processes: 2
+  num_cpu_workers: 1
+  cpu_cores: 64
+  cpu_memory: "768G"
+  cpu_resource_spec: "mfree=12G"
+  cpu_processes: 16
 
 # Segmentation parameters
 segmentation:
@@ -65,5 +70,4 @@ segmentation:
 feature_extraction:
   channels: [0,1,2]
   n5_path_pattern: "ch{}/s0" # Pattern for N5 channels for feature extraction
-  chunk_size: "768,768,768"  # Core chunk size for feature extraction
-  overlap: "128,128,128"        # Overlap for feature extraction
+  batch_size: 10000

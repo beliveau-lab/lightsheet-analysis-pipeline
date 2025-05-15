@@ -601,9 +601,6 @@ def distributed_eval(
     if 'diameter' not in eval_kwargs.keys():
         eval_kwargs['diameter'] = 40
     overlap = eval_kwargs['diameter'] * 2
-    block_indices, block_crops = get_block_crops(
-        input_shape, blocksize, overlap, mask=mask,
-    )
     logger.info(f"Using diameter={eval_kwargs['diameter']}, calculated overlap={overlap}")
 
     block_indices, block_crops = get_block_crops(
@@ -981,7 +978,7 @@ def main():
         logger.info(f"Model: {args.model_path}")
         logger.info(f"Block Size: {block_size_tuple}")
 
-        mask = get_foreground_mask(args.input_n5, 'ch2/s5')
+        mask = get_foreground_mask(args.input_n5, 'ch2/s4')
         # Call distributed_eval (no longer needs cluster_kwargs)
         # It now requires the client
         mask_ref, boxes = distributed_eval(
