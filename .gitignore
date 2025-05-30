@@ -10,7 +10,6 @@ test_data/
 *.zarr.tar.bz2
 alignment/BigStitcher-Spark/logs/spark/
 .snakemake/
-submit_snakemake.sh
 test_seg_single_block.ipynb
 launch_gpu_workers.py
 .cursorignore
@@ -18,3 +17,4 @@ alignment
 *__pycache__*
 *.npy
 dev/
+scripts/visualization.py

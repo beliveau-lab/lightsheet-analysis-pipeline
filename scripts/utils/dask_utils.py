@@ -48,9 +48,9 @@ def setup_dask_sge_cluster(
 
     # --- Dask Configuration ---
     dask_config_defaults = {
-        'temporary-directory': os.environ.get('TMPDIR', None), # Use TMPDIR if set
-        'distributed.comm.timeouts.connect': '180s',
-        'distributed.comm.timeouts.tcp': '360s',
+        'temporary-directory': os.environ.get('TMPDIR', '/tmp'), # Use TMPDIR if set
+        'distributed.comm.timeouts.connect': '3600s',
+        'distributed.comm.timeouts.tcp': '3600s',
         "distributed.worker.memory.spill": 0.70,
         "distributed.worker.memory.pause": 0.90,
         "distributed.worker.memory.terminate": 0.98,

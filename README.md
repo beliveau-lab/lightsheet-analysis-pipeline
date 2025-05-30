@@ -24,6 +24,14 @@ Next, we will set up the config.yaml file. First specify the input directory and
 -   `input_dir`: The folder containing the raw image data (e.g., `.h5` files).
 -   `input_xml`: The path to the metadata file (e.g., `.xml`).
 
+Next, specify whether you want to reorient the sample. This currently applies the "SHIFT-Y" transformation from BigDataViewer.
+
+#TODO: add custom transform matrix as an option
+
+-   `reorient_sample`: 
+    - `enabled` : Whether to reorient the sample in SHIFT-Y view.
+
+
 Next, we need to specify the BigStitcher-Spark installation directory:
 
 **BigStitcher-Spark Settings (from `config.yaml`)**
@@ -122,6 +130,7 @@ This step runs dask-distributed nuclear instance segmentation with Cellpose.
 After segmentation, this step measures various properties (features) of the segmented objects (e.g., size, shape, intensity in different channels).
 
 -   `feature_extraction`: Container for feature extraction settings.
+    -   `output_suffix`: Text added to the input filename to create the output feature extraction filename (e.g., "_features.csv").
     -   `channels`: List of channels from which to extract features for each segmented object.
     -   `n5_path_pattern`: A template defining how to access data for different channels within the N5/Zarr file (e.g., "ch{}/s0", where {} is replaced by the channel number).
     -   `batch_size`: Number of cells to process in a single batch (to control peak memory usage)
@@ -133,6 +142,15 @@ After configuring the .yaml, you can begin execution of the Snakemake workflow w
 
 `$ qsub submit_snakemake.sh`
 
-- TODO: discuss spark and dask dashboard access
+You may need to create a conda environment with snakemake installed, and point to it in the submit_snakemake.sh script.
 
+To perform a dry run of the pipeline, you can modify the submit_snakemake.sh script to run snakemake with the -n flag.
+
+
+
+
+
+- TODO: discuss spark and dask dashboard access
+- TODO: add an environment.yaml file to the repo
+- TODO: add dry run command line option to submit_snakemake.sh
 

@@ -18,6 +18,8 @@ import logging
 import torch
 import math
 import dask_jobqueue
+import subprocess
+from threading import Thread
 
 # --- Import Dask utility functions ---
 from utils.dask_utils import setup_dask_sge_cluster, shutdown_dask, change_worker_attributes
@@ -26,6 +28,29 @@ from utils.dask_utils import setup_dask_sge_cluster, shutdown_dask, change_worke
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 cellpose.io.logger_setup()
+
+# def monitor_gpu(log_file):
+#     """Run nvidia-smi and write output to a log file with line buffering."""
+#     # Use stdbuf to force line buffering (Linux/macOS)
+#     proc = subprocess.Popen(
+#         ["stdbuf", "-oL",  # Line buffer stdout
+#          "nvidia-smi",
+#          "--query-gpu=timestamp,memory.used",
+#          "--format=csv",
+#          "-l", "10"],  # Log every 1 second
+#         stdout=subprocess.PIPE,
+#         universal_newlines=True  # Handle text output
+#     )
+
+#     with open(log_file, "w") as f:
+#         for line in proc.stdout:
+#             f.write(line)
+#             f.flush()  # Ensure immediate write
+
+# monitor_thread = Thread(target=monitor_gpu, args=("/net/beliveau/vol1/project/VB_Segmentation/subprojects/OTLS-Analyzer/logs/test_rp_gpu_memory.log",))
+# monitor_thread.daemon = True  # Terminate thread when main program exits
+# monitor_thread.start()
+
 
 # Reduce verbosity of dask logs if desired
 # logging.getLogger('distributed').setLevel(logging.WARNING)
@@ -261,7 +286,7 @@ def process_block(
 
 
     segmentation_remapped, remap = global_segment_ids(segmentation_trimmed, block_index, nblocks)
-
+    if remap[0] == 0: remap = remap[1:]
     logger.debug(f"Block {block_index}: Segmentation shape final: {segmentation_remapped.shape}, Remap len: {len(remap)}")
     if output_arr:
         logger.debug(f"Block {block_index}: Output Zarr shape: {output_arr.shape}, chunks: {output_arr.chunks}")
@@ -598,10 +623,8 @@ def distributed_eval(
 
 
 
-    if 'diameter' not in eval_kwargs.keys():
-        eval_kwargs['diameter'] = 40
-    overlap = eval_kwargs['diameter'] * 2
-    logger.info(f"Using diameter={eval_kwargs['diameter']}, calculated overlap={overlap}")
+    overlap = 90 # should not hardcode this
+    logger.info(f"calculated overlap={overlap}")
 
     block_indices, block_crops = get_block_crops(
         input_shape, blocksize, overlap, mask=mask, # Pass opened mask handle
@@ -633,8 +656,11 @@ def distributed_eval(
              raise
 
         # Compute global 1% and 99% percentiles using Dask
-        #dask_array = da.from_zarr(input_arr_handle, component=input_n5_subpath_for_workers)
-        global_p1, global_p99 = 0, 12000
+        # TODO: only calculate percentiles on array within foreground mask
+
+        dask_array = da.from_zarr(input_arr_handle, component=input_n5_subpath_for_workers)
+        global_p1, global_p99 = da.percentile(da.ravel(dask_array), [1,99]).compute()
+        global_p1, global_p99 = int(global_p1), int(global_p99)
         logger.info(f"Global 1% percentile: {global_p1}, Global 99% percentile: {global_p99}")
         # --- Submit Blocks for Processing ---
         futures = client.map(
@@ -723,10 +749,6 @@ def distributed_eval(
         return zarr.open(write_path, mode='r'), merged_boxes
 
 
-#----------------------- component functions (stitching/relabeling) -----------#
-# (Keep get_block_crops, determine_merge_relabeling, adjacent_faces,
-#  block_face_adjacency_graph, shrink_labels, merge_all_boxes, merge_boxes)
-# Make sure these functions log appropriately if errors occur.
 
 def get_block_crops(shape, blocksize, overlap, mask):
     """Given a voxel grid shape, blocksize, and overlap size, construct
@@ -906,7 +928,7 @@ def main():
     parser.add_argument("--runtime", default="1400000", help="Job runtime (SGE format or seconds)")
     parser.add_argument("--resource_spec", default="gpgpu=1,cuda=1", help="SGE resource specification (e.g., 'gpgpu=1,cuda=1')")
     parser.add_argument("--log_dir", default=None, help="Directory for Dask worker logs")
-    parser.add_argument("--conda_env", default="dask-cellpose", help="Conda environment to activate on workers")
+    parser.add_argument("--conda_env", default="otls-pipeline", help="Conda environment to activate on workers")
 
 
     # --- Argument Parsing ---
@@ -930,7 +952,7 @@ def main():
             runtime=str(snakemake.resources.runtime),
             resource_spec=snakemake.resources.gpu_resource_spec,
             log_dir=snakemake.config['dask'].get('log_dir', None), # Reuse dask log dir
-            conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "dask-cellpose",
+            conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "otls-pipeline",
         )
     else:
         logger.info("Parsing command-line arguments.")
@@ -995,6 +1017,7 @@ def main():
         )
 
         logger.info("Segmentation complete.")
+
         # Optionally save boxes if needed:
         # if boxes:
         #    box_file = os.path.splitext(args.output_zarr)[0] + "_boxes.pkl"

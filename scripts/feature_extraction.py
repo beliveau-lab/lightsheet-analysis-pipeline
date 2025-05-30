@@ -19,8 +19,150 @@ from skimage.measure import regionprops, regionprops_table
 import psutil
 from dask import delayed, compute
 from utils.dask_utils import setup_dask_sge_cluster, shutdown_dask
-from dask_image.ndmeasure import find_objects
+import sparse
+import dask.dataframe as dd
 
+
+def to_sparse(block):
+    # block is a numpy ndarray here; convert to sparse.COO
+    return sparse.COO.from_numpy(block)
+
+def _array_chunk_location(block_id, chunks):
+    """Pixel coordinate of top left corner of the array chunk."""
+    array_location = []
+    for idx, chunk in zip(block_id, chunks):
+        array_location.append(sum(chunk[:idx]))
+    return tuple(array_location)
+
+def _find_bounding_boxes(x, array_location):
+    """An alternative to scipy.ndimage.find_objects, supporting sparse.COO."""
+    # 1) Extract unique non‑zero labels
+    if isinstance(x, sparse.COO):
+        # sparse.COO.data holds the non-zeros, .coords is shape (ndim, nnz)
+        data   = x.data
+        coords = x.coords
+        # only consider nonzero labels
+        mask   = data != 0
+        unique_vals = np.unique(data[mask])
+    else:
+        unique_vals = np.unique(x)
+        unique_vals = unique_vals[unique_vals != 0]
+
+    # 2) For each label, find its min/max in each dim
+    result = {}
+    for val in unique_vals:
+        if isinstance(x, sparse.COO):
+            # locations of this label in sparse coords
+            sel = np.nonzero(data == val)[0]
+            # for each dim i, coords[i][sel] are the positions
+            positions = [coords[i, sel] for i in range(x.ndim)]
+        else:
+            # numpy fallback
+            positions = np.where(x == val)
+
+        # build nd‑slice shifted by array_location
+        slices = tuple(
+            slice(
+                int(positions[i].min()) + array_location[i],
+                int(positions[i].max()) + 1 + array_location[i]
+            )
+            for i in range(x.ndim)
+        )
+        result[int(val)] = slices
+
+    # 3) turn into a DataFrame with one column per dimension
+    cols = list(range(x.ndim))
+    return pd.DataFrame.from_dict(result, orient='index', columns=cols)
+
+
+def _combine_slices(slices):
+    """
+    Return the union of all slice objects in `slices`.
+
+    Ignores any elements that are not real slice objects.
+    Raises ValueError if, after filtering, no slices remain.
+    """
+    slices = [eval(sl) for sl in slices]
+    # keep only true slice instances
+    good = [sl for sl in slices if isinstance(sl, slice)]
+    
+    if not good:
+        raise ValueError(f"_combine_slices got no slice objects, got: {slices!r}")
+    if len(good) == 1:
+        return good[0]
+    # extract starts & stops
+    starts = [sl.start for sl in good]
+    stops  = [sl.stop  for sl in good]
+    return slice(min(starts), max(stops))
+
+
+def _merge_bounding_boxes(x: pd.DataFrame, ndim: int) -> pd.Series:
+    """
+    Merge bounding‐box slices for one label across multiple chunks.
+    
+    Parameters
+    ----------
+    x : DataFrame
+        Rows all belong to the same label.  Must be indexed by that label,
+        and have columns 0..ndim-1 containing slice objects.
+    ndim : int
+        Number of dimensions.
+    
+    Returns
+    -------
+    Series
+        One row per dimension (0..ndim-1), containing the unioned slice.
+        Series.name is set to the integer label.
+    """
+    # The label is the index value (all rows share the same label).
+    label = x.index[0]
+    
+    data = {}
+    for i in range(ndim):
+        # collect all slices in column i
+        sls = list(x[i])
+        data[i] = _combine_slices(sls)
+    
+    return pd.Series(data=data, index=list(range(ndim)), name=label)
+
+
+def find_objects(label_image):
+    """
+    For each chunk of `label_image`, call our chunk‑level _find_bounding_boxes
+    (delayed → pandas.DataFrame), then concatenate them all into one Dask DataFrame
+    and group by label to merge bounding boxes across chunks.
+    """
+    # 1) build one delayed pandas.DataFrame per chunk
+    delayed_dfs = []
+    for block_id, slc in zip(
+        np.ndindex(*label_image.numblocks),
+        da.core.slices_from_chunks(label_image.chunks)
+    ):
+        chunk = label_image[slc]
+        loc   = _array_chunk_location(block_id, label_image.chunks)
+        delayed_dfs.append(
+            delayed(_find_bounding_boxes)(chunk, loc)
+        )
+
+    # 2) turn that list of delayed DataFrames into a single Dask DataFrame
+    #    each “partition” is one chunk’s DataFrame
+    meta = dd.utils.make_meta({i: object for i in range(label_image.ndim)})
+    ddf  = dd.from_delayed(delayed_dfs, meta=meta)
+    # 3) group by the integer label (the index), and merge slices
+    #    _merge_bounding_boxes takes a chunk of rows (all from one label)
+    #    and returns a single Series of slices per dimension
+    result = (
+        ddf
+        .reset_index()              # bring the label (index) into a column
+        .rename(columns={"index": "label"})
+        .groupby("label")
+        .apply(
+            lambda pdf: _merge_bounding_boxes(pdf, label_image.ndim),
+            meta=meta
+        )
+    )
+
+    return result
 
 # --- Environment Logging  ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -214,7 +356,7 @@ def main():
     parser.add_argument("--runtime", default="140000", help="Job runtime (SGE format or seconds)") # Keep as string for flexibility
     parser.add_argument("--resource_spec", default="mfree=60G", help="SGE resource specification (e.g., 'mfree=60G')")
     parser.add_argument("--log_dir", default=None, help="Directory for Dask worker logs (defaults to ./dask_worker_logs_TIMESTAMP)")
-    parser.add_argument("--conda_env", default="dask-cellpose", help="Conda environment to activate on workers")
+    parser.add_argument("--conda_env", default="otls-pipeline", help="Conda environment to activate on workers")
 
     # --- Argument Parsing ---
     # Check if running under Snakemake
@@ -237,7 +379,7 @@ def main():
             runtime=str(snakemake.resources.runtime), # Ensure string
             resource_spec=snakemake.resources.resource_spec,
             log_dir=snakemake.params.log_dir,
-            conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "dask-cellpose" # Get conda env name if available
+            conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "otls-pipeline" # Get conda env name if available
         )
     else:
         logger.info("Not running under Snakemake, parsing command-line arguments.")
@@ -311,10 +453,22 @@ def main():
         mask_array = load_n5_zarr_array(args.input_mask)
         logger.info(f"Loaded Mask (ZYX assumed): Shape={mask_array.shape}, Dtype={mask_array.dtype}")
 
+        chunk_shape = tuple(c[0] for c in mask_array.chunks)  
+        #    (this grabs the first size of each chunk-axis; e.g. (100,100))
+        meta_block = sparse.COO.from_numpy(
+            np.zeros(chunk_shape, dtype=mask_array.dtype)
+        )
+
+        mask_sparse = mask_array.map_blocks(to_sparse, 
+                                        dtype=mask_array.dtype,
+                                        meta=meta_block,
+                                        chunks=mask_array.chunks
+                                        )
+
 
         # --- First Pass: Get Object Bounding Boxes ---
 
-        df_bboxes = find_objects(mask_array).compute()
+        df_bboxes = find_objects(mask_sparse).compute()
         df_bboxes = pd.DataFrame(df_bboxes)
         df_bboxes.to_csv(args.output_csv.replace(".csv", "_bboxes.csv"), index=False)
 

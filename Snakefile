@@ -6,6 +6,39 @@ import xml.etree.ElementTree as ET
 # Configuration
 configfile: "config.yaml"
 
+# --- Globals / Path Definitions ---
+INITIAL_XML = config["input_xml"]
+
+PIPELINE_OUTPUT_DIR = Path(config["output_dir"])
+PIPELINE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+LOG_DIR = PIPELINE_OUTPUT_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# Helper to generate consistent XML names
+def get_processed_xml_path(base_name, stage_suffix, reoriented_prefix_if_applicable=""):
+    return PIPELINE_OUTPUT_DIR / f"{reoriented_prefix_if_applicable}{Path(base_name).stem}_{stage_suffix}.xml"
+
+# Determine the base XML for stitching after potential reorientation
+if config.get("reorient_sample", {}).get("enabled", False):
+    REORIENTED_XML_NAME = Path(INITIAL_XML).stem + "_reoriented"
+    ORIENTED_XML_FOR_STITCHING = get_processed_xml_path(INITIAL_XML, "reoriented")
+else:
+    REORIENTED_XML_NAME = Path(INITIAL_XML).stem # No reorientation, use original stem
+    ORIENTED_XML_FOR_STITCHING = Path(INITIAL_XML) # Stitch the original XML
+
+PAIRWISE_STITCHED_XML = get_processed_xml_path(ORIENTED_XML_FOR_STITCHING.name, "pairwise")
+SOLVED_XML = get_processed_xml_path(PAIRWISE_STITCHED_XML.name, "solved")
+
+# Define output file paths (examples)
+REORIENT_DONE = PIPELINE_OUTPUT_DIR / "reorient.done"
+PAIRWISE_DONE = PIPELINE_OUTPUT_DIR / "pairwise.done"
+SOLVED_DONE = PIPELINE_OUTPUT_DIR / "solved.done"
+AFFINE_FUSION_N5 = PIPELINE_OUTPUT_DIR / "dataset_fused.n5"
+AFFINE_FUSION_DONE = PIPELINE_OUTPUT_DIR / "affine_fusion.done"
+SEGMENTED_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['segmentation']['output_suffix']}"
+FEATURES_CSV = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['feature_extraction']['output_suffix']}"
+
 # Helper function to get channels from xml file
 def get_channels(xml_file):
     # TODO: Implement XML channel detection
@@ -33,9 +66,6 @@ def get_spark_env_exports(params):
     """
     return exports.strip() # Remove leading/trailing whitespace
 
-# Collect input files
-XML_FILE = config["input_xml"]
-print(f"Found XML file: {XML_FILE}")
 
 # Add this helper function at the top with the others
 def check_xml_stage(xml_file, stage):
@@ -63,46 +93,42 @@ def check_xml_stage(xml_file, stage):
         print(f"Error checking XML stage {stage}: {e}")
         return False
 
-# Example helper function
-def get_intermediate_xml(base_xml, stage_suffix):
-    name, ext = os.path.splitext(base_xml)
-    return f"{name}_{stage_suffix}{ext}"
 
 rule all:
     input:
-        config["input_dir"] + "/dataset_fused_features.csv"
+        csv=FEATURES_CSV
 
 rule reorient_sample:
     input:
-        xml=XML_FILE
+        xml=INITIAL_XML
     output:
-        xml=config["reorient_sample"]["output_xml"]
+        xml=ORIENTED_XML_FOR_STITCHING
     conda:
-        "dask-cellpose"
+        "otls-pipeline"
     script:
         "scripts/reorient_sample.py"
 
 rule pairwise_stitching:
     input:
-        xml=config["reorient_sample"]["output_xml"]
+        xml=ORIENTED_XML_FOR_STITCHING
     output:
-        done=config["input_dir"] + "/pairwise.done",
-        stitched_xml=os.path.splitext(config["reorient_sample"]["output_xml"])[0]+'_pairwise.xml'
+        done=PAIRWISE_DONE,
+        stitched_xml=PAIRWISE_STITCHED_XML
     params:
         outdir=lambda w, output: os.path.dirname(output.done),
         script_dir=config["bigstitcher_script_dir"],
-        runtime=config["runtime"],
-        n_nodes=config["n_nodes"],
-        executors_per_node=config["cluster"]["executors_per_node"],
-        cores_per_executor=config["cluster"]["cores_per_executor"],
-        overhead_cores=config["cluster"]["overhead_cores_per_worker"],
-        tasks_per_core=config["cluster"]["tasks_per_executor_core"],
-        cores_driver=config["cluster"]["cores_driver"],
-        gb_per_slot=config["cluster"]["gb_per_slot"],
-        ram_per_core=config["cluster"]["ram_per_core"],
-        project="beliveaulab",
-        stitching_channel=config["stitching_channel"],
-        min_correlation=config["min_correlation"]
+        runtime=config["spark_cluster"]["runtime"],
+        n_nodes=config["spark_cluster"]["n_nodes"],
+        executors_per_node=config["spark_cluster"]["executors_per_node"],
+        cores_per_executor=config["spark_cluster"]["cores_per_executor"],
+        overhead_cores=config["spark_cluster"]["overhead_cores_per_worker"],
+        tasks_per_core=config["spark_cluster"]["tasks_per_executor_core"],
+        cores_driver=config["spark_cluster"]["cores_driver"],
+        gb_per_slot=config["spark_cluster"]["gb_per_slot"],
+        ram_per_core=config["spark_cluster"]["ram_per_core"],
+        project=config["spark_cluster"]["project"],
+        stitching_channel=config["stitching"]["stitching_channel"],
+        min_correlation=config["stitching"]["min_correlation"]
     run:
         shell("cp {input.xml} {output.stitched_xml}")
         print(f"Checking for existing pairwise results in {output.stitched_xml}")
@@ -193,24 +219,24 @@ rule pairwise_stitching:
 
 rule solver:
     input:
-        xml=os.path.splitext(config["input_xml"])[0]+'_pairwise.xml',
-        pairwise=config["input_dir"] + "/pairwise.done"
+        xml=PAIRWISE_STITCHED_XML,
+        pairwise=PAIRWISE_DONE
     output:
-        done=config["input_dir"] + "/solved.done",
-        solved_xml=os.path.splitext(config["input_xml"])[0]+'_solved.xml'
+        done=SOLVED_DONE,
+        solved_xml=SOLVED_XML
     params:
         outdir=lambda w, output: os.path.dirname(output.done),
         script_dir=config["bigstitcher_script_dir"],
-        runtime=config["runtime"],
-        n_nodes=config["n_nodes"],
-        executors_per_node=config["cluster"]["executors_per_node"],
-        cores_per_executor=config["cluster"]["cores_per_executor"],
-        overhead_cores=config["cluster"]["overhead_cores_per_worker"],
-        tasks_per_core=config["cluster"]["tasks_per_executor_core"],
-        cores_driver=config["cluster"]["cores_driver"],
-        gb_per_slot=config["cluster"]["gb_per_slot"],
-        ram_per_core=config["cluster"]["ram_per_core"],
-        project="beliveaulab"
+        runtime=config["spark_cluster"]["runtime"],
+        n_nodes=config["spark_cluster"]["n_nodes"],
+        executors_per_node=config["spark_cluster"]["executors_per_node"],
+        cores_per_executor=config["spark_cluster"]["cores_per_executor"],
+        overhead_cores=config["spark_cluster"]["overhead_cores_per_worker"],
+        tasks_per_core=config["spark_cluster"]["tasks_per_executor_core"],
+        cores_driver=config["spark_cluster"]["cores_driver"],
+        gb_per_slot=config["spark_cluster"]["gb_per_slot"],
+        ram_per_core=config["spark_cluster"]["ram_per_core"],
+        project=config["spark_cluster"]["project"]
     run:
         shell("cp {input.xml} {output.solved_xml}")
         print(f"Checking for existing solver results in {output.solved_xml}")
@@ -300,29 +326,29 @@ rule solver:
 
 rule affine_fusion:
     input:
-        xml=ancient(os.path.splitext(config["input_xml"])[0]+'_solved.xml'),
-        solved=config["input_dir"] + "/solved.done"
+        xml=SOLVED_XML,
+        solved=SOLVED_DONE
     output:
-        n5=directory(config["input_dir"] + "/dataset_fused.n5"),
-        done=config["input_dir"] + "/affine_fusion.done"
+        n5=directory(AFFINE_FUSION_N5),
+        done=AFFINE_FUSION_DONE
     params:
         outdir=lambda w, output: os.path.dirname(output.n5),
         script_dir=config["bigstitcher_script_dir"],
-        runtime=config["runtime"],
-        n_nodes=config["n_nodes"],
-        executors_per_node=config["cluster"]["executors_per_node"],
-        cores_per_executor=config["cluster"]["cores_per_executor"],
-        overhead_cores=config["cluster"]["overhead_cores_per_worker"],
-        tasks_per_core=config["cluster"]["tasks_per_executor_core"],
-        cores_driver=config["cluster"]["cores_driver"],
-        gb_per_slot=config["cluster"]["gb_per_slot"],
-        ram_per_core=config["cluster"]["ram_per_core"],
-        project="beiveaulab",
-        block_size=config["block_size"],
-        data_type=config["data_type"],
-        min_intensity=config["intensity"]["min"],
-        max_intensity=config["intensity"]["max"],
-        channels=config["channels"]
+        runtime=config["spark_cluster"]["runtime"],
+        n_nodes=config["spark_cluster"]["n_nodes"],
+        executors_per_node=config["spark_cluster"]["executors_per_node"],
+        cores_per_executor=config["spark_cluster"]["cores_per_executor"],
+        overhead_cores=config["spark_cluster"]["overhead_cores_per_worker"],
+        tasks_per_core=config["spark_cluster"]["tasks_per_executor_core"],
+        cores_driver=config["spark_cluster"]["cores_driver"],
+        gb_per_slot=config["spark_cluster"]["gb_per_slot"],
+        ram_per_core=config["spark_cluster"]["ram_per_core"],
+        project=config["spark_cluster"]["project"],
+        block_size=config["fusion"]["block_size"],
+        data_type=config["fusion"]["data_type"],
+        min_intensity=config["fusion"]["intensity"]["min"],
+        max_intensity=config["fusion"]["intensity"]["max"],
+        channels=config["fusion"]["channels"]
     shell:
         """
         set -x  # Print commands as they execute
@@ -415,13 +441,13 @@ rule affine_fusion:
 rule segmentation:
     input:
         # scheduler=SCHEDULER_FILE,
-        done=config["input_dir"] + "/affine_fusion.done",
-        n5=config["input_dir"] + "/dataset_fused.n5"
+        done=AFFINE_FUSION_DONE,
+        n5=AFFINE_FUSION_N5
     output:
-        zarr=directory(config["input_dir"] + "/dataset_fused" + config["segmentation"]["output_suffix"])
+        zarr=directory(SEGMENTED_ZARR)
     params:
         outdir=lambda w, output: os.path.dirname(output.zarr),
-        n5_channel_path=config["segmentation"].get("n5_channel_path", "ch0/s0"),
+        n5_channel_path=config["segmentation"].get("n5_channel_path", "ch2/s0"),
         block_size=config["segmentation"]["block_size"],
         model_path=config["segmentation"]["cellpose_model_path"],
         eval_kwargs=config["segmentation"]["eval_kwargs"],
@@ -436,20 +462,20 @@ rule segmentation:
         gpu_queue=config["dask"]["gpu_queue"],
         gpu_processes=config["dask"]["gpu_processes"]
     conda:
-        "dask-cellpose"
+        "otls-pipeline"
     script:
         "scripts/segmentation.py"
 
 
 rule feature_extraction:
     input:
-        n5=config["input_dir"] + "/dataset_fused.n5",
-        zarr=config["input_dir"] + "/dataset_fused" + config["segmentation"]["output_suffix"]
+        n5=AFFINE_FUSION_N5,
+        zarr=SEGMENTED_ZARR
     output:
-        csv=config["input_dir"] + "/dataset_fused_features.csv"
+        csv=FEATURES_CSV
     params:
         outdir=lambda w, output: os.path.dirname(output.csv),
-        log_dir=config["dask"].get("log_dir") + "/dask_worker_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}/",
+        log_dir=LOG_DIR,
         n5_path_pattern=config["feature_extraction"].get("n5_path_pattern", "ch{}/s0"),
         channels=config["feature_extraction"].get("channels", "0"),
         batch_size=config["feature_extraction"].get("batch_size", 10000),
@@ -464,6 +490,6 @@ rule feature_extraction:
         resource_spec=config["dask"].get("cpu_resource_spec", "mfree=60G"),
         processes=config["dask"].get("cpu_processes", 2)
     conda:
-        "dask-cellpose"
+        "otls-pipeline"
     script:
         "scripts/feature_extraction.py"
