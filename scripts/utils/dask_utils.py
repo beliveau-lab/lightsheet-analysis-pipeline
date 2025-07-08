@@ -123,6 +123,11 @@ def setup_dask_sge_cluster(
     try:
         cluster.scale(n_workers)
         logger.info(f"Cluster scale command issued. Waiting for workers (check dashboard).")
+
+        # wait for workers to be ready 
+        client.wait_for_workers(n_workers, timeout=300)
+        logger.info(f"Successfully connected to {len(client.scheduler_info()['workers'])} workers.")
+
         logger.info(f"Dask dashboard available at: {client.dashboard_link}")
     except Exception as e:
         logger.error(f"Failed to scale cluster or connect client: {e}", exc_info=True)

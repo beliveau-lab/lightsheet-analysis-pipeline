@@ -1,18 +1,16 @@
 # Input/Output
-input_xml: "/net/beliveau/vol2/instrument/E9.5_287/Zoom_287/Zoom_287_processed_writable.xml"
-output_dir: "/net/beliveau/vol2/instrument/E9.5_287/Zoom_287"
+input_xml: "/net/beliveau/vol2/instrument/E9.5_290/Zoom_290_subset_test/Zoom_290_subset_test_processed_writable.xml"
+output_dir: "/net/beliveau/vol2/instrument/E9.5_290/Zoom_290_subset_test/"
 
 # Sample reorientation 
 reorient_sample:
   enabled: False
-
 
 # BigStitcher-Spark location
 bigstitcher_script_dir: "/net/beliveau/vol1/project/BigStitcher-Spark"
 spark_job_timeout: 43200 # Timeout in seconds for waiting on spark job logs (e.g., 12 hours)
 
 # Spark cluster configuration
-
 spark_cluster:
   runtime: "8:00"  # Runtime in HH:MM format
   n_nodes: 12      # Number of worker nodes
@@ -40,40 +38,48 @@ fusion:
     max: 65535
   data_type: "UINT16"  # Options: UINT8, UINT16
 
-
-
 # Dask configuration
 dask:
-  log_dir: "/net/beliveau/vol1/project/VB_Segmentation/subprojects/OTLS-Analyzer/logs"
-  runtime: "14000000"
+  log_dir: "/net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/logs/"
+  runtime: "14000000" # 4 hours
 
-  gpu_project: "shendure_beliveau"
-  gpu_queue: "shendure-long.q"
-  num_gpu_workers: 48
-  gpu_cores: 1
-  gpu_memory: "120G"
-  gpu_resource_spec: "gpgpu=1,cuda=1,mfree=120G"
-  gpu_processes: 2
-  
+  gpu_project: "beliveaulab"
+  gpu_queue: "beliveau-long.q"
+  num_gpu_workers: 2
+  gpu_cores: 16
+  gpu_memory: "64G"
+  gpu_resource_spec: "gpgpu=1,cuda=1,mfree=256G" # resource requirements for gpu jobs
+  gpu_processes: 4 # number of processes per gpu worker
+
+
   cpu_project: "beliveaulab"
   cpu_queue: "beliveau-long.q"
-  num_cpu_workers: 1
-  cpu_cores: 64
-  cpu_memory: "128G"
-  cpu_resource_spec: "mfree=8G"
-  cpu_processes: 16
-
+  num_cpu_workers: 4
+  cpu_cores: 4
+  cpu_memory: "32G"
+  cpu_resource_spec: "mfree=128G"
+  cpu_processes: 4
+  # cpu mem = cpu resource spec / cpu process
 # Segmentation parameters
 segmentation:
-  output_suffix: "_masks_cpsamr5_minsize4000.zarr"
+  output_suffix: "_masks_cpsamr5.zarr"
   block_size: "512,512,512" # Example
   eval_kwargs: "{'anisotropy': 1, 'do_3D': True, 'cellprob_threshold': -1, 'batch_size': 128, 'flow_threshold': 0.4, 'normalize': False, 'min_size': 4000, 'z_axis' : 0}" # Example
   cellpose_model_path: "/net/beliveau/vol1/project/VB_Segmentation/subprojects/Tissue_Segmentation_Revisited/models/cellpose_otls/models/otls_r5_sam_a100_lr1e-5"
   n5_channel_path: "ch2/s0" # Define the path within N5 for segmentation input
 
+# Choosing lmax parameters
+lmax_optimization:
+  enabled: true
+  sample_size: 100           # Number of objects for bootstrap
+  lmax_range: [4, 20]       # Range of lmax values to test
+  cache_results: true       # Cache results to avoid recomputation
+  sampling_rate: 2.752      # Pixel size in micrometers
+  min_object_size: 500      # Minimum object size for inclusion
+
 # Feature extraction parameters
 feature_extraction:
-  output_suffix: "_features_cpsamr5_minsize4000.zarr"
+  output_suffix: "_features_spherical_harmonics.csv"
   channels: [0,1,2]
   n5_path_pattern: "ch{}/s0" # Pattern for N5 channels for feature extraction
   batch_size: 50000

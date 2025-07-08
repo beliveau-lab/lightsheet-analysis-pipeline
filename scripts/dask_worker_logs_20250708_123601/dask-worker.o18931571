@@ -1,0 +1,63 @@
+Worker started on b001.grid.gs.washington.edu at Tue Jul  8 12:36:09 PDT 2025
+2025-07-08 12:36:14,268 - distributed.nanny - INFO -         Start Nanny at: 'tcp://10.110.100.15:40955'
+2025-07-08 12:36:17,388 - distributed.worker - INFO -       Start worker at:  tcp://10.110.100.15:36169
+2025-07-08 12:36:17,389 - distributed.worker - INFO -          Listening to:  tcp://10.110.100.15:36169
+2025-07-08 12:36:17,389 - distributed.worker - INFO -           Worker name:               SGECluster-0
+2025-07-08 12:36:17,389 - distributed.worker - INFO -          dashboard at:        10.110.100.15:34603
+2025-07-08 12:36:17,389 - distributed.worker - INFO - Waiting to connect to:  tcp://10.110.100.15:45989
+2025-07-08 12:36:17,389 - distributed.worker - INFO - -------------------------------------------------
+2025-07-08 12:36:17,389 - distributed.worker - INFO -               Threads:                          2
+2025-07-08 12:36:17,389 - distributed.worker - INFO -                Memory:                  59.60 GiB
+2025-07-08 12:36:17,389 - distributed.worker - INFO -       Local Directory: /tmp/18931571.1.beliveau-long.q/dask-scratch-space/worker-pqnb7s8z
+2025-07-08 12:36:17,389 - distributed.worker - INFO - -------------------------------------------------
+2025-07-08 12:36:21,593 - distributed.worker - INFO - Starting Worker plugin shuffle
+2025-07-08 12:36:21,594 - distributed.worker - INFO -         Registered to:  tcp://10.110.100.15:45989
+2025-07-08 12:36:21,594 - distributed.worker - INFO - -------------------------------------------------
+2025-07-08 12:36:21,594 - distributed.core - INFO - Starting established connection to tcp://10.110.100.15:45989
+2025-07-08 12:36:29,871 - distributed.core - INFO - Event loop was unresponsive in Worker for 7.33s.  This is often caused by long-running GIL-holding functions or moving large chunks of data. This can cause timeouts and instability.
+2025-07-08 12:36:44,908 - INFO - Successfuly imported local module
+2025-07-08 12:36:44,908 - INFO - --- Environment Versions ---
+2025-07-08 12:36:44,908 - INFO - Platform: Linux-5.15.0-119-generic-x86_64-with-glibc2.35
+2025-07-08 12:36:44,908 - INFO - Python: 3.13.3 | packaged by conda-forge | (main, Apr 14 2025, 20:44:03) [GCC 13.3.0]
+2025-07-08 12:36:44,908 - INFO - Dask: 2025.2.0
+2025-07-08 12:36:44,908 - INFO - Distributed: 2025.2.0
+2025-07-08 12:36:44,908 - INFO - Cloudpickle: 3.0.0
+2025-07-08 12:36:44,908 - INFO - Msgpack: 1.0.8
+2025-07-08 12:36:44,908 - INFO - Zarr: 2.13.3
+2025-07-08 12:36:44,908 - INFO - NumPy: 2.2.6
+2025-07-08 12:36:44,908 - INFO - Scikit-image: 0.25.0
+2025-07-08 12:36:44,908 - INFO - --- Dask Config (relevant parts) ---
+2025-07-08 12:36:44,908 - INFO - distributed.comm.compression: False
+2025-07-08 12:36:44,908 - INFO - --- End Environment Info ---
+2025-07-08 12:36:44,909 - distributed.core - INFO - Event loop was unresponsive in Worker for 14.59s.  This is often caused by long-running GIL-holding functions or moving large chunks of data. This can cause timeouts and instability.
+2025-07-08 12:39:20,929 - distributed.worker - INFO - Stopping worker at tcp://10.110.100.15:36169. Reason: scheduler-close
+2025-07-08 12:39:20,932 - distributed.batched - INFO - Batched Comm Closed <TCP (closed) Worker->Scheduler local=tcp://10.110.100.15:43686 remote=tcp://10.110.100.15:45989>
+Traceback (most recent call last):
+  File "/net/beliveau/vol1/home/msforman/miniconda3/envs/otls-pipeline/lib/python3.13/site-packages/distributed/comm/tcp.py", line 298, in write
+    raise StreamClosedError()
+tornado.iostream.StreamClosedError: Stream is closed
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/net/beliveau/vol1/home/msforman/miniconda3/envs/otls-pipeline/lib/python3.13/site-packages/distributed/batched.py", line 115, in _background_send
+    nbytes = yield coro
+             ^^^^^^^^^^
+  File "/net/beliveau/vol1/home/msforman/miniconda3/envs/otls-pipeline/lib/python3.13/site-packages/tornado/gen.py", line 769, in run
+    value = future.result()
+  File "/net/beliveau/vol1/home/msforman/miniconda3/envs/otls-pipeline/lib/python3.13/site-packages/distributed/comm/tcp.py", line 308, in write
+    convert_stream_closed_error(self, e)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/net/beliveau/vol1/home/msforman/miniconda3/envs/otls-pipeline/lib/python3.13/site-packages/distributed/comm/tcp.py", line 137, in convert_stream_closed_error
+    raise CommClosedError(f"in {obj}: {exc}") from exc
+distributed.comm.core.CommClosedError: in <TCP (closed) Worker->Scheduler local=tcp://10.110.100.15:43686 remote=tcp://10.110.100.15:45989>: Stream is closed
+2025-07-08 12:39:20,970 - distributed.nanny - INFO - Closing Nanny gracefully at 'tcp://10.110.100.15:40955'. Reason: scheduler-close
+2025-07-08 12:39:20,971 - distributed.worker.state_machine - WARNING - Async instruction for <Task cancelled name="execute('finalize-4f90cf5a-97ed-445d-bdf9-61effa9b5cbc')" coro=<Worker.execute() done, defined at /net/beliveau/vol1/home/msforman/miniconda3/envs/otls-pipeline/lib/python3.13/site-packages/distributed/worker_state_machine.py:3607>> ended with CancelledError
+2025-07-08 12:39:20,971 - distributed.worker.state_machine - WARNING - Async instruction for <Task cancelled name="execute('finalize-83b3ae8c-207b-4607-bb23-77e4c6f2c7bc')" coro=<Worker.execute() done, defined at /net/beliveau/vol1/home/msforman/miniconda3/envs/otls-pipeline/lib/python3.13/site-packages/distributed/worker_state_machine.py:3607>> ended with CancelledError
+2025-07-08 12:39:20,971 - distributed.worker - INFO - Removing Worker plugin shuffle
+2025-07-08 12:39:22,620 - distributed.core - INFO - Received 'close-stream' from tcp://10.110.100.15:45989; closing.
+2025-07-08 12:39:22,620 - distributed.nanny - INFO - Worker closed
+2025-07-08 12:39:24,621 - distributed.nanny - ERROR - Worker process died unexpectedly
+2025-07-08 12:39:25,378 - distributed.nanny - INFO - Closing Nanny at 'tcp://10.110.100.15:40955'. Reason: nanny-close-gracefully
+2025-07-08 12:39:25,379 - distributed.nanny - INFO - Nanny at 'tcp://10.110.100.15:40955' closed.
+2025-07-08 12:39:25,379 - distributed.dask_worker - INFO - End worker

@@ -15,14 +15,24 @@ import platform
 import distributed
 import msgpack
 import skimage
+from aicsshparam import shtools, shparam
+
 from skimage.measure import regionprops, regionprops_table
 import psutil
 from dask import delayed, compute
 from utils.dask_utils import setup_dask_sge_cluster, shutdown_dask
 import sparse
 import dask.dataframe as dd
+import json 
 
+sys.path.append(os.path.dirname(__file__))
+import align_3d as align
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+logger.info("Successfuly imported local module")
+
+# --- Helper Functions ---
 def to_sparse(block):
     # block is a numpy ndarray here; convert to sparse.COO
     return sparse.COO.from_numpy(block)
@@ -219,10 +229,9 @@ def load_n5_zarr_array(path, n5_subpath=None, chunks=None):
     else:
         raise ValueError(f"Unsupported array format (expected .n5 or .zarr): {path}")
 
-
-def process_object(obj, mask_da, image_da):
-    """Process single object with minimal memory footprint.
-    
+def process_object(obj, mask_da, image_da, optimal_lmax=4):
+    """
+    Enhanced process_object that includes spherical harmonics computation
     Args:
         obj: pandas.Series
             A row from the DataFrame containing the object bounding box coordinates
@@ -230,40 +239,49 @@ def process_object(obj, mask_da, image_da):
             The segmentation mask array (ZYX)
         image_da: dask.array.Array
             The input image array (ZYXC)
+        optimal_lmax: int
+            The optimized lmax value for spherical harmonics computation
     Returns:
-        df: pandas.DataFrame
-            A DataFrame containing the object properties.
-
+        final_dict: dict
+            A dictionary containing the object properties and spherical harmonics coefficients
     """
-    # Extract slices from DataFrame row
     obj_id = int(obj.name)
     slice_z = obj[0]
-    slice_y = obj[1]
+    slice_y = obj[1] 
     slice_x = obj[2]
 
-    # compute centroid of object (in global coordinates)
+    # Compute centroid of object (in global coordinates)
     centroid_z = slice_z.start + (slice_z.stop - slice_z.start) // 2
     centroid_y = slice_y.start + (slice_y.stop - slice_y.start) // 2
     centroid_x = slice_x.start + (slice_x.stop - slice_x.start) // 2
 
-    # Get only the pixels belonging to the object of interest
-    label_slice = np.where(mask_da == obj_id, mask_da, 0)
-    
     try:
-        # Compute the properties of the object
-        df = regionprops_table(label_slice, image_da, properties=['label', 'area', "mean_intensity", "axis_major_length", "axis_minor_length"])
-
-        # Add the centroid coordinates to the DataFrame
-        df['centroid_z'] = centroid_z
-        df['centroid_y'] = centroid_y
-        df['centroid_x'] = centroid_x
-        return df
+        # Get only the pixels belonging to the object of interest
+        label_slice = np.where(mask_da == obj_id, mask_da, 0)
+        # Basic regionprops
+        props = regionprops_table(label_slice, image_da, properties=["label", 
+                                                                     "area", 
+                                                                     "mean_intensity"])
+        # Add global centroid coordinates
+        props['centroid_z'] = centroid_z
+        props['centroid_y'] = centroid_y
+        props['centroid_x'] = centroid_x
+        # Align object
+        aligned_slice, props = align.align_object(label_slice, props) # align object also adds features to df_props
+        # Spherical harmonics computation
+        (coeffs, _), _ = shparam.get_shcoeffs(
+            aligned_slice, 
+            lmax=optimal_lmax,
+            alignment_2d=False)
+        coeffs.update({'label': obj_id})
+        final_dict = props | coeffs
+        return final_dict
     except Exception as e:
-
         logger.error(f"Error processing object {obj_id}: {e}", exc_info=True)
         return None
 
-def parallel_processing(objects_df, mask_da, image_da, batch_size=10000):
+
+def parallel_processing(objects_df, mask_da, image_da, optimal_lmax=4, batch_size=10000):  # Reduced from 10000
     """Process single objects in parallel to control memory usage.
     
     Args:
@@ -273,6 +291,8 @@ def parallel_processing(objects_df, mask_da, image_da, batch_size=10000):
             The segmentation mask array (ZYX)
         image_da: dask.array.Array
             The input image array (ZYXC)
+        optimal_lmax: int
+            The optimized lmax value for spherical harmonics computation
         batch_size: int
             The number of objects to process in each batch
     Returns:
@@ -286,7 +306,6 @@ def parallel_processing(objects_df, mask_da, image_da, batch_size=10000):
     total_num_batches = len(objects_df) // batch_size
     # Process in batches to control memory
     for i in range(1, len(objects_df)):
-
         # Get the object bounding box coordinates
         obj = objects_df.iloc[i]
         slice_z = obj[0]
@@ -298,7 +317,8 @@ def parallel_processing(objects_df, mask_da, image_da, batch_size=10000):
             delayed(process_object)(
                 obj,
                 mask_da[slice_z, slice_y, slice_x],
-                image_da[slice_z, slice_y, slice_x]
+                image_da[slice_z, slice_y, slice_x],
+                optimal_lmax
             )
         )
         ## TODO: Prepare batches while waiting for the previous batch to finish?
@@ -331,6 +351,28 @@ def parse_list_string(list_str, dtype=int):
     if not list_str:
         return []
     return [dtype(item.strip()) for item in list_str.split(',')]
+
+def load_optimal_lmax(cache_file_path, default_lmax=4):
+    """Load optimal lmax from cache file.
+    
+    Args:
+        cache_file_path: str
+            Path to the lmax optimization cache file
+        default_lmax: int
+            Default lmax value if cache loading fails
+    Returns:
+        int: Optimal lmax value
+    """
+    try:
+        with open(cache_file_path, 'r') as f:
+            cache_data = json.load(f)
+        optimal_lmax = cache_data.get('optimal_lmax', default_lmax)
+        logger.info(f"Loaded optimal lmax: {optimal_lmax} from {cache_file_path}")
+        return optimal_lmax
+    except Exception as e:
+        logger.warning(f"Failed to load lmax from cache {cache_file_path}: {e}")
+        logger.info(f"Using default lmax: {default_lmax}")
+        return default_lmax
 
 def main():
 
@@ -366,6 +408,7 @@ def main():
         args = argparse.Namespace(
             input_n5=snakemake.input.n5,
             input_mask=snakemake.input.zarr, # Assuming mask is zarr input
+            lmax_cache=snakemake.input.lmax_cache,
             output_csv=snakemake.output.csv,
             n5_path_pattern=snakemake.params.get("n5_path_pattern", "ch{}/s0"),
             channels=",".join(map(str, snakemake.params.channels)), # Get channels list from params
@@ -387,6 +430,12 @@ def main():
 
     channels_to_process = parse_list_string(args.channels)
 
+    # --- Load Optimal Lmax ---
+    optimal_lmax = 4  # Default value
+    if 'snakemake' in globals() and hasattr(args, 'lmax_cache'):
+        optimal_lmax = load_optimal_lmax(args.lmax_cache, default_lmax=4)
+    else:
+        logger.info(f"Using default lmax: {optimal_lmax}")
 
     # --- Dask Cluster Setup ---
     cluster = None
@@ -408,6 +457,14 @@ def main():
             # job_name='feat_extract' # Consider adding a job name
         )
         logger.info(f"Dask dashboard link: {client.dashboard_link}") # Log dashboard link!
+        
+        # # Upload align_3d module to all workers
+        # align_3d_path = os.path.join(os.path.dirname(__file__), 'align_3d.py')
+        # if os.path.exists(align_3d_path):
+        #     client.upload_file(align_3d_path)
+        #     logger.info("Uploaded align_3d.py to all Dask workers")
+        # else:
+        #     logger.warning(f"align_3d.py not found at {align_3d_path}")
 
     except Exception as e:
         logger.error(f"Failed to set up Dask cluster: {e}", exc_info=True)
@@ -451,6 +508,11 @@ def main():
 
         image_array = da.stack(image_array_list, axis=3)
         mask_array = load_n5_zarr_array(args.input_mask)
+
+        # crop_size = (800, 800, 800)  # z, y, x
+        # mask_crop = mask_array[:crop_size[0], :crop_size[1], :crop_size[2]]
+        # image_crop = image_array[:crop_size[0], :crop_size[1], :crop_size[2]]
+
         logger.info(f"Loaded Mask (ZYX assumed): Shape={mask_array.shape}, Dtype={mask_array.dtype}")
 
         chunk_shape = tuple(c[0] for c in mask_array.chunks)  
@@ -475,8 +537,13 @@ def main():
 
         # --- Second Pass: Extract Features ---
 
-        data_frames = parallel_processing(df_bboxes, mask_array, image_array, batch_size=args.batch_size)
-
+        data_frames = parallel_processing(
+            df_bboxes, 
+            mask_array, 
+            image_array, 
+            optimal_lmax=optimal_lmax, 
+            batch_size=args.batch_size
+        )
         df_properties = pd.DataFrame(data_frames)
         df_properties = df_properties.applymap(lambda x: x.item() if hasattr(x, "item") else x)
 
