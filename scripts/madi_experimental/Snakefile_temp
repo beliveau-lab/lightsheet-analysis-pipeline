@@ -37,6 +37,7 @@ SOLVED_DONE = PIPELINE_OUTPUT_DIR / "solved.done"
 AFFINE_FUSION_N5 = PIPELINE_OUTPUT_DIR / "dataset_fused.n5"
 AFFINE_FUSION_DONE = PIPELINE_OUTPUT_DIR / "affine_fusion.done"
 SEGMENTED_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['segmentation']['output_suffix']}"
+CHOSEN_LMAX_CACHE = PIPELINE_OUTPUT_DIR / "lmax_optimization_cache.json"
 FEATURES_CSV = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['feature_extraction']['output_suffix']}"
 
 # Helper function to get channels from xml file
@@ -466,16 +467,48 @@ rule segmentation:
     script:
         "scripts/segmentation.py"
 
-
-rule feature_extraction:
+rule choose_lmax: 
     input:
         n5=AFFINE_FUSION_N5,
         zarr=SEGMENTED_ZARR
     output:
+        lmax_cache=CHOSEN_LMAX_CACHE 
+    params:
+        enabled=config["lmax_optimization"].get("enabled", True),
+        sample_size=config["lmax_optimization"].get("sample_size", 20),
+        lmax_min=config["lmax_optimization"]["lmax_range"][0],
+        lmax_max=config["lmax_optimization"]["lmax_range"][1],
+        lmax_step=config["lmax_optimization"].get("lmax_step", 4),
+        sampling_rate=config["lmax_optimization"].get("sampling_rate", 2.752),
+        min_object_size=config["lmax_optimization"].get("min_object_size", 500),
+        batch_size=config["lmax_optimization"].get("batch_size", 100),
+        error_batch_size=config["lmax_optimization"].get("error_batch_size", 5),
+        n5_channel_path=config["segmentation"].get("n5_channel_path", "ch2/s0"),
+        log_dir=config["dask"].get("log_dir")
+    resources:
+        runtime=config["dask"].get("runtime", "04:00:00"),
+        project=config["dask"]["cpu_project"],
+        queue=config["dask"]["cpu_queue"],
+        num_workers=config["dask"]["num_cpu_workers"],
+        mem_per_worker=config["dask"].get("cpu_memory", "60G"),
+        cores_per_worker=config["dask"].get("cpu_cores", 2),
+        resource_spec=config["dask"].get("cpu_resource_spec", "mfree=60G"),
+        processes=config["dask"].get("cpu_processes", 2)
+    conda:
+        "otls-pipeline"
+    script:
+        "scripts/choose_lmax.py"
+
+rule feature_extraction:
+    input:
+        n5=AFFINE_FUSION_N5,
+        zarr=SEGMENTED_ZARR,
+        lmax_cache=CHOSEN_LMAX_CACHE 
+    output:
         csv=FEATURES_CSV
     params:
         outdir=lambda w, output: os.path.dirname(output.csv),
-        log_dir=LOG_DIR,
+        log_dir=config["dask"].get("log_dir"),
         n5_path_pattern=config["feature_extraction"].get("n5_path_pattern", "ch{}/s0"),
         channels=config["feature_extraction"].get("channels", "0"),
         batch_size=config["feature_extraction"].get("batch_size", 10000),
@@ -487,8 +520,7 @@ rule feature_extraction:
         num_workers=config["dask"]["num_cpu_workers"],
         mem_per_worker=config["dask"].get("cpu_memory", "60G"),
         cores_per_worker=config["dask"].get("cpu_cores", 1),
-        resource_spec=config["dask"].get("RAM_per_core", "mfree=60G"),
-        processes=config["dask"].get("cpu_processes", 2)
+        resource_spec=config["dask"].get("cpu_resource_spec", "mfree=60G")
     conda:
         "otls-pipeline"
     script:

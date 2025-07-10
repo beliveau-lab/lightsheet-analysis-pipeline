@@ -77,7 +77,7 @@ def load_and_test_pipeline(main_dir):
             else:
                 label_slice = object
                 label_slices.append(label_slice)
-            aligned_obj = align_object(label_slice)
+            aligned_obj = align_object(label_slice, {})
             # Check volume preservation
             aligned_volume = np.sum(aligned_obj > 0)
             information['original_shape'] = object.shape

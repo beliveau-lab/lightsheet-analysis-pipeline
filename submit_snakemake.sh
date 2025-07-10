@@ -13,7 +13,6 @@ cd /net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline
 snakemake --unlock
 snakemake \
     --rerun-triggers mtime \
-    --rerun-incomplete \
     --cores 1 \
     --latency-wait 60 \
     --use-conda \
