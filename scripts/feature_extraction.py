@@ -15,6 +15,12 @@ import platform
 import distributed
 import msgpack
 import skimage
+from aicsshparam import shparam
+
+# Suppress aicsshparam warnings globally for all workers
+warnings.filterwarnings("ignore", message="Mesh centroid seems to fall outside the object.*", module="aicsshparam")
+warnings.filterwarnings("ignore", message=".*spherical harmonics.*", module="aicsshparam")
+
 from skimage.measure import regionprops, regionprops_table
 import psutil
 from dask import delayed, compute
@@ -23,6 +29,15 @@ import sparse
 import dask.dataframe as dd
 
 
+sys.path.append(os.path.dirname(__file__))
+import align_3d as align
+
+# --- Script-specific constants ---
+DEFAULT_LMAX = 16 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# --- Helper Functions ---
 def to_sparse(block):
     # block is a numpy ndarray here; convert to sparse.COO
     return sparse.COO.from_numpy(block)
@@ -219,10 +234,9 @@ def load_n5_zarr_array(path, n5_subpath=None, chunks=None):
     else:
         raise ValueError(f"Unsupported array format (expected .n5 or .zarr): {path}")
 
-
-def process_object(obj, mask_da, image_da):
-    """Process single object with minimal memory footprint.
-    
+def process_object(obj, mask_da, image_da, optimal_lmax=4):
+    """
+    Enhanced process_object that includes spherical harmonics computation
     Args:
         obj: pandas.Series
             A row from the DataFrame containing the object bounding box coordinates
@@ -230,40 +244,73 @@ def process_object(obj, mask_da, image_da):
             The segmentation mask array (ZYX)
         image_da: dask.array.Array
             The input image array (ZYXC)
+        optimal_lmax: int
+            The optimized lmax value for spherical harmonics computation
     Returns:
-        df: pandas.DataFrame
-            A DataFrame containing the object properties.
-
+        final_dict: dict
+            A dictionary containing the object properties and spherical harmonics coefficients
     """
-    # Extract slices from DataFrame row
+    import sys, os
+    import warnings
+    sys.path.append(os.path.dirname(__file__))   # path where feature_extraction.py lives
+    from aicsshparam import shparam
+    import align_3d as align
+    
+    # Suppress aicsshparam warnings that occur for every object
+    warnings.filterwarnings("ignore", message="Mesh centroid seems to fall outside the object.*", module="aicsshparam")
+
     obj_id = int(obj.name)
     slice_z = obj[0]
-    slice_y = obj[1]
+    slice_y = obj[1] 
     slice_x = obj[2]
 
-    # compute centroid of object (in global coordinates)
+    # Compute centroid of object (in global coordinates)
     centroid_z = slice_z.start + (slice_z.stop - slice_z.start) // 2
     centroid_y = slice_y.start + (slice_y.stop - slice_y.start) // 2
     centroid_x = slice_x.start + (slice_x.stop - slice_x.start) // 2
 
-    # Get only the pixels belonging to the object of interest
-    label_slice = np.where(mask_da == obj_id, mask_da, 0)
-    
     try:
-        # Compute the properties of the object
-        df = regionprops_table(label_slice, image_da, properties=['label', 'area', "mean_intensity", "axis_major_length", "axis_minor_length"])
+        # Get only the pixels belonging to the object of interest
+        label_slice = np.where(mask_da == obj_id, mask_da, 0)
+        # Basic regionprops
+        props = regionprops_table(label_slice, image_da, properties=["label", 
+                                                                     "area", 
+                                                                     "mean_intensity"])
+        area = props['area'][0]
+        if area < 4000:  # Increase threshold and fix indexing
+            logger.info(f"Object {obj_id} too small (area={area}). Skipping...")
+            return None
+        else:
+            logger.info(f"Object {obj_id} is large enough (area={area}). Processing...")
 
-        # Add the centroid coordinates to the DataFrame
-        df['centroid_z'] = centroid_z
-        df['centroid_y'] = centroid_y
-        df['centroid_x'] = centroid_x
-        return df
+        # Add global centroid coordinates
+        props['centroid_z'] = centroid_z
+        props['centroid_y'] = centroid_y
+        props['centroid_x'] = centroid_x
+        # Align object
+        aligned_slice, props = align.align_object(label_slice, props) # align object also adds features to df_props
+        
+        # Check if aligned object has any foreground voxels
+        if np.sum(aligned_slice) == 0:
+            logger.info(f"Object {obj_id} has no foreground voxels after alignment. Skipping spherical harmonics...")
+            return None
+            
+        # Spherical harmonics computation
+        (coeffs, _), _ = shparam.get_shcoeffs(
+            aligned_slice, 
+            lmax=optimal_lmax,
+            alignment_2d=False)
+        
+        coeffs.update({'label': obj_id})
+        final_dict = props | coeffs
+        logger.info(f"Processed object {obj_id}")
+        return final_dict
     except Exception as e:
-
         logger.error(f"Error processing object {obj_id}: {e}", exc_info=True)
         return None
 
-def parallel_processing(objects_df, mask_da, image_da, batch_size=10000):
+
+def parallel_processing(objects_df, mask_da, image_da, optimal_lmax, batch_size=10000):  # Reduced from 10000
     """Process single objects in parallel to control memory usage.
     
     Args:
@@ -273,6 +320,8 @@ def parallel_processing(objects_df, mask_da, image_da, batch_size=10000):
             The segmentation mask array (ZYX)
         image_da: dask.array.Array
             The input image array (ZYXC)
+        optimal_lmax: int
+            The optimized lmax value for spherical harmonics computation
         batch_size: int
             The number of objects to process in each batch
     Returns:
@@ -285,8 +334,8 @@ def parallel_processing(objects_df, mask_da, image_da, batch_size=10000):
     batch_idx = 0
     total_num_batches = len(objects_df) // batch_size
     # Process in batches to control memory
+    logger.info(f"Number of objects before batching: {len(objects_df)}")
     for i in range(1, len(objects_df)):
-
         # Get the object bounding box coordinates
         obj = objects_df.iloc[i]
         slice_z = obj[0]
@@ -298,7 +347,8 @@ def parallel_processing(objects_df, mask_da, image_da, batch_size=10000):
             delayed(process_object)(
                 obj,
                 mask_da[slice_z, slice_y, slice_x],
-                image_da[slice_z, slice_y, slice_x]
+                image_da[slice_z, slice_y, slice_x],
+                optimal_lmax
             )
         )
         ## TODO: Prepare batches while waiting for the previous batch to finish?
@@ -331,6 +381,8 @@ def parse_list_string(list_str, dtype=int):
     if not list_str:
         return []
     return [dtype(item.strip()) for item in list_str.split(',')]
+
+# Removed load_optimal_lmax; lmax is now a constant defined in main()
 
 def main():
 
@@ -387,6 +439,8 @@ def main():
 
     channels_to_process = parse_list_string(args.channels)
 
+    # --- Lmax Parameter ---
+    logger.info(f"Using lmax: {DEFAULT_LMAX}")
 
     # --- Dask Cluster Setup ---
     cluster = None
@@ -408,7 +462,7 @@ def main():
             # job_name='feat_extract' # Consider adding a job name
         )
         logger.info(f"Dask dashboard link: {client.dashboard_link}") # Log dashboard link!
-
+        
     except Exception as e:
         logger.error(f"Failed to set up Dask cluster: {e}", exc_info=True)
         if cluster: # Attempt shutdown even if client setup failed after cluster object created
@@ -420,7 +474,6 @@ def main():
 
     # --- Main Processing Block ---
     try:
-        start_time = time.time()
         logger.info("--- Starting Distributed Property Computation ---")
         logger.info(f"Input N5: {args.input_n5}")
         logger.info(f"Input Mask: {args.input_mask}")
@@ -446,11 +499,11 @@ def main():
         if not image_array_list:
             raise ValueError("No image channels were successfully loaded.")
 
-
         # --- Load Mask and Image Arrays ---
 
         image_array = da.stack(image_array_list, axis=3)
         mask_array = load_n5_zarr_array(args.input_mask)
+
         logger.info(f"Loaded Mask (ZYX assumed): Shape={mask_array.shape}, Dtype={mask_array.dtype}")
 
         chunk_shape = tuple(c[0] for c in mask_array.chunks)  
@@ -467,21 +520,23 @@ def main():
 
 
         # --- First Pass: Get Object Bounding Boxes ---
-
         df_bboxes = find_objects(mask_sparse).compute()
         df_bboxes = pd.DataFrame(df_bboxes)
         df_bboxes.to_csv(args.output_csv.replace(".csv", "_bboxes.csv"), index=False)
-
+        # df_bboxes = df_bboxes.sample(n=100)
 
         # --- Second Pass: Extract Features ---
-
-        data_frames = parallel_processing(df_bboxes, mask_array, image_array, batch_size=args.batch_size)
-
+        data_frames = parallel_processing(
+            df_bboxes, 
+            mask_array, 
+            image_array, 
+            optimal_lmax=DEFAULT_LMAX, 
+            batch_size=args.batch_size
+        )
         df_properties = pd.DataFrame(data_frames)
         df_properties = df_properties.applymap(lambda x: x.item() if hasattr(x, "item") else x)
-
         df_properties.to_csv(args.output_csv, index=False)
-
+        logger.info(f"Finished processing all objects and csv saved.")
     except Exception as e:
         logger.error(f"Error in main processing block: {e}", exc_info=True)
         sys.exit(1)

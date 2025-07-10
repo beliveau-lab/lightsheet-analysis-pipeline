@@ -3,19 +3,17 @@
 #$ -l mfree=128G
 #$ -pe serial 1
 #$ -j y
-#$ -o /net/beliveau/vol1/project/VB_Segmentation/subprojects/OTLS-Analyzer/logs/snakemake.log
+#$ -o /net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/logs
 #$ -V
-#$ -m ea
 
 
-conda activate /net/beliveau/vol1/home/vbrow/miniconda3/envs/snakemake-spark
-cd /net/beliveau/vol1/project/VB_Segmentation/subprojects/OTLS-Analyzer/
+conda activate /net/beliveau/vol1/home/msforman/miniconda3/envs/snakemake
+cd /net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline
 
 snakemake --unlock
-
 snakemake \
-    --latency-wait 60 \
-    --rerun-incomplete \
-    --use-conda \
     --rerun-triggers mtime \
-    -p
+    --cores 1 \
+    --latency-wait 60 \
+    --use-conda \
+    -p 

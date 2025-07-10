@@ -487,7 +487,7 @@ rule feature_extraction:
         num_workers=config["dask"]["num_cpu_workers"],
         mem_per_worker=config["dask"].get("cpu_memory", "60G"),
         cores_per_worker=config["dask"].get("cpu_cores", 1),
-        resource_spec=config["dask"].get("cpu_resource_spec", "mfree=60G"),
+        resource_spec=config["dask"].get("RAM_per_core", "mfree=60G"),
         processes=config["dask"].get("cpu_processes", 2)
     conda:
         "otls-pipeline"

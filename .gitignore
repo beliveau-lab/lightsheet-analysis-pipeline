@@ -18,3 +18,5 @@ alignment
 *.npy
 dev/
 scripts/visualization.py
+*.ipynb
+config.yaml
