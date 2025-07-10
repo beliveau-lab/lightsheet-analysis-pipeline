@@ -32,32 +32,6 @@ def get_zyx_coords(label_slice):
         return np.empty((0, 3))
     return np.column_stack(indices).astype(np.float64)
 
-def ensure_centroid_inside(binary_obj):
-    """Ensure object centroid is inside the object."""
-    if np.sum(binary_obj) == 0:
-        return binary_obj
-    
-    centroid = center_of_mass(binary_obj)
-    centroid_int = np.round(centroid).astype(int)
-    
-    # Check if centroid is already inside
-    if (0 <= centroid_int[0] < binary_obj.shape[0] and
-        0 <= centroid_int[1] < binary_obj.shape[1] and
-        0 <= centroid_int[2] < binary_obj.shape[2] and
-        binary_obj[tuple(centroid_int)]):
-        return binary_obj
-    
-    # Add voxels near centroid if needed
-    result = binary_obj.copy()
-    for offset in [(0,0,0), (1,0,0), (-1,0,0), (0,1,0), (0,-1,0), (0,0,1), (0,0,-1)]:
-        pos = centroid_int + np.array(offset)
-        if (0 <= pos[0] < result.shape[0] and
-            0 <= pos[1] < result.shape[1] and
-            0 <= pos[2] < result.shape[2]):
-            result[tuple(pos)] = True
-    
-    return result
-
 def align_object(label_slice, df_props):
     """
     Align 3D object to principal axes.
@@ -86,7 +60,7 @@ def align_object(label_slice, df_props):
         'minor_magnitude': lengths[2]
     })
     
-    # align eigenvecs to standard axes using identity matrix
+    # align eigenvecs to standard axes using identity matrix 
     rotation = R.align_vectors(eigenvecs, np.eye(3))[0]
 
     # Transform coordinates
@@ -109,3 +83,7 @@ def align_object(label_slice, df_props):
     aligned[z_coords, y_coords, x_coords] = True
     
     return aligned, df_props
+
+# project cell onto spline
+# local coordinate system -> tan is AP axis, L/R is binormal, DV is normal
+# 9 new columns -> cosine 
