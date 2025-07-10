@@ -309,7 +309,7 @@ def process_object(obj, mask_da, image_da, optimal_lmax=4):
         return None
 
 
-def parallel_processing(objects_df, mask_da, image_da, optimal_lmax=4, batch_size=10000):  # Reduced from 10000
+def parallel_processing(objects_df, mask_da, image_da, optimal_lmax, batch_size=10000):  # Reduced from 10000
     """Process single objects in parallel to control memory usage.
     
     Args:
