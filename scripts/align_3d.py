@@ -41,7 +41,9 @@ def align_object(label_slice, df_props):
         df_props: Dictionary of object properties
     
     Returns:
-        Aligned binary array and updated properties
+        Aligned: 3D binary array aligned to principal axes
+        df_props: Dictionary of object properties updated with
+            principal axis lengths
     """
     # Get ZYX coordinates and align to principal axes
     coords = get_zyx_coords(label_slice)

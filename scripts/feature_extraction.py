@@ -28,11 +28,12 @@ from utils.dask_utils import setup_dask_sge_cluster, shutdown_dask
 import sparse
 import dask.dataframe as dd
 
-DEFAULT_LMAX = 16  # Fixed default value
 
 sys.path.append(os.path.dirname(__file__))
 import align_3d as align
 
+# --- Script-specific constants ---
+DEFAULT_LMAX = 16 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -473,7 +474,6 @@ def main():
 
     # --- Main Processing Block ---
     try:
-        start_time = time.time()
         logger.info("--- Starting Distributed Property Computation ---")
         logger.info(f"Input N5: {args.input_n5}")
         logger.info(f"Input Mask: {args.input_mask}")

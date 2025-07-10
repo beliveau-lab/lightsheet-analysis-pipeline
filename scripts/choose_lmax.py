@@ -85,17 +85,6 @@ class BootstrapLmaxSelection:
                                      4))
         
     def select_optimal_lmax(self, mask_path):
-        """
-        Main entry point: finds optimal lmax for this mouse sample.
-        
-        Args:
-            mask_path: Path to segmentation mask
-            n5_path: Path to n5 image data (optional, not used currently)
-        
-        Returns:
-            optimal_lmax: Best lmax value
-            cv_results: Cross-validation results for each lmax
-        """
         try:
             # Setup distributed computing
             if self.params.get('use_dask', True):
