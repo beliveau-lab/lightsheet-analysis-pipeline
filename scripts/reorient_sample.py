@@ -1,6 +1,9 @@
 import xml.etree.ElementTree as ET
 import re
+import argparse
+import logging
 
+logger = logging.getLogger(__name__)
 def modify_spimdata_xml(input_filepath, output_filepath):
     """
     Modifies a SpimData XML file to perform a 90 degree rotation of the sample.
@@ -159,6 +162,9 @@ if __name__ == "__main__":
         )
     else:
         logger.info("Not running under Snakemake, parsing command-line arguments.")
-        args = parser.parse_args()
+        args = argparse.Namespace(
+            input_xml=snakemake.input.xml,
+            output_xml=snakemake.output.xml,
+        )
 
     modify_spimdata_xml(args.input_xml, args.output_xml)
