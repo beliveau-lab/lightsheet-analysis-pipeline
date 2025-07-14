@@ -38,6 +38,7 @@ AFFINE_FUSION_N5 = PIPELINE_OUTPUT_DIR / "dataset_fused.n5"
 AFFINE_FUSION_DONE = PIPELINE_OUTPUT_DIR / "affine_fusion.done"
 SEGMENTED_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['segmentation']['output_suffix']}"
 FEATURES_CSV = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['feature_extraction']['output_suffix']}"
+DESTRIPE_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['destripe']['output_suffix']}"
 
 # Helper function to get channels from xml file
 def get_channels(xml_file):
@@ -467,10 +468,35 @@ rule segmentation:
         "scripts/segmentation.py"
 
 
-rule feature_extraction:
+rule destripe:
     input:
         n5=AFFINE_FUSION_N5,
-        zarr=SEGMENTED_ZARR
+        mask = SEGMENTED_ZARR
+    output:
+        zarr=directory(DESTRIPE_ZARR)
+    params:
+        outdir=lambda w, output: os.path.dirname(output.zarr),
+        n5_path_pattern=config["destripe"].get("n5_path_pattern", "ch{}/s0"),
+        channels=config["destripe"].get("channels", "0"),
+        log_dir=LOG_DIR,
+        block_size=config["destripe"]["block_size"],
+    resources:
+        runtime=config["dask"].get("runtime", "1400000"), # Example runtime
+        project=config["dask"]["gpu_project"], # SGE project
+        queue=config["dask"]["gpu_queue"],
+        num_workers=config["dask"]["num_gpu_workers"],
+        mem_per_worker=config["dask"].get("gpu_memory", "12G"),
+        cores_per_worker=config["dask"].get("gpu_cores", 1),
+        resource_spec=config["dask"].get("gpu_resource_spec", "gpgpu=1,cuda=1"),
+        processes=config["dask"].get("gpu_processes", 2)
+    conda:
+        "otls-pipeline"
+    script:
+        "scripts/destripe.py"
+rule feature_extraction:
+    input:
+        img_zarr=DESTRIPE_ZARR,
+        mask_zarr=SEGMENTED_ZARR
     output:
         csv=FEATURES_CSV
     params:
@@ -485,9 +511,9 @@ rule feature_extraction:
         project=config["dask"]["cpu_project"], # SGE project
         queue=config["dask"]["cpu_queue"],
         num_workers=config["dask"]["num_cpu_workers"],
-        mem_per_worker=config["dask"].get("cpu_memory", "60G"),
+        mem_per_worker=config["dask"].get("total_cpu_memory", "60G"),
         cores_per_worker=config["dask"].get("cpu_cores", 1),
-        resource_spec=config["dask"].get("RAM_per_core", "mfree=60G"),
+        resource_spec=config["dask"].get("RAM_per_core", "mfree=8G"),
         processes=config["dask"].get("cpu_processes", 2)
     conda:
         "otls-pipeline"
