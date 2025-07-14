@@ -389,8 +389,8 @@ def main():
     parser = argparse.ArgumentParser(description="Distributed Feature Extraction for Microscopy Images")
 
     # Input/Output Arguments
-    parser.add_argument("--input_n5", required=True, help="Path to the input N5 store (intensity image data)")
-    parser.add_argument("--n5_path_pattern", default="ch{}/s0", help="Pattern for N5 dataset paths within the store (use {} for channel number)")
+    parser.add_argument("--input_zarr", required=True, help="Path to the input Zarr store (intensity image data)")
+
     parser.add_argument("--input_mask", required=True, help="Path to the input mask Zarr store or TIF file (label image data)")
     parser.add_argument("--output_csv", required=True, help="Path to the output CSV file for features")
     parser.add_argument("--channels", required=True, help="Comma-separated list of channel indices to process (e.g., '0,1,2')")
@@ -416,8 +416,8 @@ def main():
         logger.info("Running under Snakemake, using snakemake object for parameters.")
         # Create a namespace object to mimic argparse result
         args = argparse.Namespace(
-            input_n5=snakemake.input.n5,
-            input_mask=snakemake.input.zarr, # Assuming mask is zarr input
+            input_zarr=snakemake.input.img_zarr,
+            input_mask=snakemake.input.mask_zarr, # Assuming mask is zarr input
             output_csv=snakemake.output.csv,
             n5_path_pattern=snakemake.params.get("n5_path_pattern", "ch{}/s0"),
             channels=",".join(map(str, snakemake.params.channels)), # Get channels list from params
@@ -475,21 +475,18 @@ def main():
     # --- Main Processing Block ---
     try:
         logger.info("--- Starting Distributed Property Computation ---")
-        logger.info(f"Input N5: {args.input_n5}")
+        logger.info(f"Input Zarr: {args.input_zarr}")
         logger.info(f"Input Mask: {args.input_mask}")
         logger.info(f"Output CSV: {args.output_csv}")
         logger.info(f"Channels: {channels_to_process}")
-        logger.info(f"N5 Pattern: {args.n5_path_pattern}")
+
 
         image_array_list = []
-        store = zarr.N5Store(args.input_n5) # Open store once
-
         for ch_idx in channels_to_process:
             n5_channel_path = 'ch{}/s0'.format(ch_idx)
-            logger.info(f"Loading channel {ch_idx} from N5 path: {args.input_n5}/{n5_channel_path}")
+            logger.info(f"Loading channel {ch_idx} from N5 path: {args.input_zarr}/{n5_channel_path}")
             try:
-                    arr_handle = zarr.open_array(store=store, path=n5_channel_path, mode='r')
-                    dask_arr = da.from_zarr(arr_handle)
+                    dask_arr = da.from_zarr(args.input_zarr + "/" + n5_channel_path)
                     logger.info(f"  Channel {ch_idx} loaded: Shape={dask_arr.shape}, Chunks={dask_arr.chunksize}, Dtype={dask_arr.dtype}")
                     image_array_list.append(dask_arr)
             except Exception as e:
