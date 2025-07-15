@@ -54,14 +54,18 @@ def align_object(label_slice, df_props):
     eigenvecs = get_principal_axes(coords)
     projections = coords @ eigenvecs.T
     lengths = np.ptp(projections, axis=0)
-    
-    # Update properties
+
+    # Encoding alignment of principal axes using dot product
+    cos_maj, cos_int, cos_min = np.diag(eigenvecs) # equivalent to dot product with standard axes (i.e. cos_maj = np.dot(eigenvecs[0], np.array([1, 0, 0])))
     df_props.update({
         'major_magnitude': lengths[0],
         'intermediate_magnitude': lengths[1], 
-        'minor_magnitude': lengths[2]
+        'minor_magnitude': lengths[2],
+        'cos_major': cos_maj,
+        'cos_intermediate': cos_int,
+        'cos_minor': cos_min
     })
-    
+
     # align eigenvecs to standard axes using identity matrix 
     rotation = R.align_vectors(eigenvecs, np.eye(3))[0]
 
