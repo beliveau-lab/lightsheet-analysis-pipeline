@@ -23,6 +23,7 @@ def setup_dask_sge_cluster(
     resource_spec: str | None = None,
     log_directory: str | None = None,
     conda_env: str | None = "dask-cellpose", # Default env name
+    dashboard_port: str | None = None,
     **kwargs # For extra SGECluster or dask config options
 ):
     """
@@ -108,6 +109,7 @@ def setup_dask_sge_cluster(
         queue=queue,
         log_directory=log_directory,
         job_script_prologue=prologue,
+        scheduler_options={"dashboard_address": dashboard_port},
         job_extra_directives=job_extra,
         # Add resource_spec if needed and not handled by job_extra
         # resource_spec=resource_spec if not any(rs in ' '.join(job_extra) for rs in ['mfree', 'gpgpu']) else None,
