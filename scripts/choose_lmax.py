@@ -3,7 +3,7 @@
 The script will:
 1. Load the mask and find objects
 2. For each lmax value:
-    a. Compute the spherical harmonics coefficients for each object
+    a. Compute the spherical harmonics coefficients for each object for each lmax value (computationally expensive)
     b. Compute the reconstruction error for each object using the mean distance between the original and reconstructed meshes
         - code taken from Allen
     c. store in a dictionary
@@ -73,7 +73,7 @@ def compute_mean_distances(obj, mask_slice, min_volume, lmax_range, sampling_rat
     try:
         aligned_obj, _ = align.align_object(label_slice, {})
         for lmax in lmax_range:
-            (_, grid_rec), (_, mesh, grid, _) = shparam.get_shcoeffs(
+            (_, grid_rec), (_, mesh, _, _) = shparam.get_shcoeffs(
                 aligned_obj, lmax=lmax, alignment_2d=False
             )
             # Compute reconstruction error
@@ -148,7 +148,7 @@ class BootstrapLMAX:
         logger.info("Creating delayed tasks for object pre-processing...")
         batch_size = self.params['batch_size']
         n_sample = self.params['sample_size']
-        sample = df_bboxes.sample(n_sample, random_state=42)  # Add random_state for reproducibility
+        sample = df_bboxes.sample(n_sample, random_state=42)
         logger.info(f"Sampled {len(sample)} objects")
         n_batches = len(sample) // batch_size
 
@@ -177,7 +177,7 @@ class BootstrapLMAX:
             results.extend(compute(*batch, sync=True))
         logger.info(f"Found {len(results)} objects")
         return [r for r in results if r is not None]
-    
+
     def run_bootstrap(self, object_errors):
         """Fixed bootstrap selection."""
         error_dict = {obj['id']: obj['distances'] for obj in object_errors}
@@ -238,7 +238,7 @@ class BootstrapLMAX:
         elbow_idx = np.argmax(second_derivative)
         chosen_lmax = lmax_values[elbow_idx]
         return chosen_lmax
-    
+        
     def plot_results(self, results, chosen_lmax):
         """Plot bootstrap results with confidence intervals."""
         plot_data = []
@@ -267,11 +267,11 @@ class BootstrapLMAX:
                         label='95% CI')
 
         # Highlight chosen lmax
-        plt.axvline(chosen_lmax, 
-                    color='red', 
-                    linestyle='--', 
-                    linewidth=2,
-                    label=f'Chosen lmax = {chosen_lmax}')
+        # plt.axvline(chosen_lmax, 
+        #             color='red', 
+        #             linestyle='--', 
+        #             linewidth=2,
+        #             label=f'Chosen lmax = {chosen_lmax}')
         plt.xlabel('lmax (Number of Coefficients)', fontsize=12)
         plt.ylabel('Mean Distance (μm)', fontsize=12)
         plt.title('Reconstruction Error', fontsize=14)
@@ -325,13 +325,13 @@ def main():
     "cpu_processes": 32,
     "cpu_resource_spec": "mfree=32G",  
     # -- computation parameters --
-    "sample_size": 1000,
+    "sample_size": 1500,
     "sampling_rate": 2.752,
     "min_size": 4000,
-    "lmax_min": 8,
-    "lmax_max": 32,
-    "batch_size": 25,
-    "n_iter": 500,
+    "lmax_min": 4,
+    "lmax_max": 80,
+    "batch_size": 100,
+    "n_iter": 1000,
     # -- tracking parameters --
     'use_dask': True,
     "log_dir" : '/net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/logs/choose_lmax/',
