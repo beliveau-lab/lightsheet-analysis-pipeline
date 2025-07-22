@@ -8,6 +8,7 @@ import pandas as pd
 import time
 import logging
 import os
+import gc
 # import dask.distributed as dd # Removed unused import
 import dask
 import cloudpickle
@@ -16,6 +17,7 @@ import distributed
 import msgpack
 import skimage
 from aicsshparam import shparam
+import torch
 
 # Suppress aicsshparam warnings globally for all workers
 warnings.filterwarnings("ignore", message="Mesh centroid seems to fall outside the object.*", module="aicsshparam")
@@ -28,6 +30,7 @@ from utils.dask_utils import setup_dask_sge_cluster, shutdown_dask
 import sparse
 import dask.dataframe as dd
 
+from cellpose.models import CellposeModel
 
 sys.path.append(os.path.dirname(__file__))
 import align_3d as align
@@ -301,10 +304,25 @@ def process_object(obj, mask_da, image_da, optimal_lmax=4):
             lmax=optimal_lmax,
             alignment_2d=False)
         
+        # instantiate cellpose model #
+        cp_model = CellposeModel(model_type='cyto3', gpu=True)
+        
+        # cellpose embedding generation #
+        sni = np.max(image_da[:, :, :, 2], axis=0)
+        masks, flows, embedding = cp_model.eval(sni, diameter=None, do_3D=False, compute_masks=False)
+        embedding_dict = {f'e{i}': val for i, val in enumerate(embedding)}
+
+        # remove garbage to avoid memory leaks #
+        del masks
+        del flows
+        del cp_model
+        gc.collect()
+        
         coeffs.update({'label': obj_id})
-        final_dict = props | coeffs
+        final_dict = props | coeffs | embedding_dict
         logger.info(f"Processed object {obj_id}")
         return final_dict
+    
     except Exception as e:
         logger.error(f"Error processing object {obj_id}: {e}", exc_info=True)
         return None
@@ -408,7 +426,7 @@ def main():
     parser.add_argument("--runtime", default="140000", help="Job runtime (SGE format or seconds)") # Keep as string for flexibility
     parser.add_argument("--resource_spec", default="mfree=60G", help="SGE resource specification (e.g., 'mfree=60G')")
     parser.add_argument("--log_dir", default=None, help="Directory for Dask worker logs (defaults to ./dask_worker_logs_TIMESTAMP)")
-    parser.add_argument("--conda_env", default="otls-pipeline", help="Conda environment to activate on workers")
+    parser.add_argument("--conda_env", default="otls-pipeline-cp3", help="Conda environment to activate on workers")
 
     # --- Argument Parsing ---
     # Check if running under Snakemake
@@ -431,7 +449,7 @@ def main():
             runtime=str(snakemake.resources.runtime), # Ensure string
             resource_spec=snakemake.resources.resource_spec,
             log_dir=snakemake.params.log_dir,
-            conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "otls-pipeline", # Get conda env name if available
+            conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "otls-pipeline-cp3", # Get conda env name if available
             dashboard_port=snakemake.resources.dashboard_port
         )
     else:
