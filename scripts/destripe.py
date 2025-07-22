@@ -160,7 +160,8 @@ def main():
             resource_spec=snakemake.resources.resource_spec,
             log_dir=snakemake.params.log_dir,
             conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "otls-pipeline", # Get conda env name if available
-            output_zarr=snakemake.output.zarr
+            output_zarr=snakemake.output.zarr,
+            dashboard_port=snakemake.resources.dashboard_port
         )
     else:
         logger.info("Not running under Snakemake, parsing command-line arguments.")
@@ -183,7 +184,8 @@ def main():
             runtime=args.runtime,
             resource_spec=args.resource_spec,
             log_directory=args.log_dir, # Pass None if not specified
-            conda_env=args.conda_env
+            conda_env=args.conda_env,
+            dashboard_port=args.dashboard_port
             # job_name='feat_extract' # Consider adding a job name
         )
         logger.info(f"Dask dashboard link: {client.dashboard_link}") # Log dashboard link!
