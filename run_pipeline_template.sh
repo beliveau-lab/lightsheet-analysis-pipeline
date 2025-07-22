@@ -3,7 +3,7 @@
 #$ -l mfree=128G
 #$ -pe serial 1
 #$ -j y
-#$ -o <path_to_log_output>
+#$ -o /net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/logs
 #$ -V
 
 
