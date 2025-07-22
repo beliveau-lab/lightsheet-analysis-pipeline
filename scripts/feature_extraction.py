@@ -328,60 +328,44 @@ def process_object(obj, mask_da, image_da, optimal_lmax=4):
         return None
 
 
-def parallel_processing(objects_df, mask_da, image_da, optimal_lmax, batch_size=10000):  # Reduced from 10000
-    """Process single objects in parallel to control memory usage.
-    
-    Args:
-        objects_df: pandas.DataFrame
-            A DataFrame containing the object bounding box coordinates
-        mask_da: dask.array.Array
-            The segmentation mask array (ZYX)
-        image_da: dask.array.Array
-            The input image array (ZYXC)
-        optimal_lmax: int
-            The optimized lmax value for spherical harmonics computation
-        batch_size: int
-            The number of objects to process in each batch
-    Returns:
-        results: list
-            A list of DataFrames containing the object properties.
+def parallel_processing(client, objects_df, mask_da, image_da, optimal_lmax):
     """
-
-    results = []
-    batch = []
-    batch_idx = 0
-    total_num_batches = len(objects_df) // batch_size
-    # Process in batches to control memory
-    logger.info(f"Number of objects before batching: {len(objects_df)}")
-    for i in range(1, len(objects_df)):
-        # Get the object bounding box coordinates
-        obj = objects_df.iloc[i]
-        slice_z = obj[0]
-        slice_y = obj[1]
-        slice_x = obj[2]
-
-        # Append delayed tasks to the batch
-        batch.append(
-            delayed(process_object)(
-                obj,
-                mask_da[slice_z, slice_y, slice_x],
-                image_da[slice_z, slice_y, slice_x],
-                optimal_lmax
-            )
-        )
-        ## TODO: Prepare batches while waiting for the previous batch to finish?
-        ## For loop is inefficient
-
-        # Process in batches
-        if len(batch) >= batch_size:
-            batch_idx += 1
-            logger.info(f"Processing batch {batch_idx} of {total_num_batches}")
-            results.extend(compute(*batch, sync=True))
-            batch = []
+    Processes objects in parallel using dask.delayed to build a precise task graph.
+    """
     
-    # Process remaining tasks
-    if batch:
-        results.extend(compute(*batch, sync=True))
+    # 1. Create a list of Dask Delayed objects
+    #    Each object represents one full "process_object" task with its dependencies.
+    #    This loop runs on the client but is very fast as it only builds a graph.
+    logger.info("Building the Dask task graph...")
+    tasks = []
+    for obj in objects_df.itertuples():
+        slice_z = obj[1]
+        slice_y = obj[2]
+        slice_x = obj[3]
+
+        # Get the Dask array slices (these are still just graph nodes)
+        mask_slice = mask_da[slice_z, slice_y, slice_x]
+        image_slice = image_da[slice_z, slice_y, slice_x]
+
+        # Wrap the function call in dask.delayed.
+        # Dask now understands that mask_slice and image_slice must be computed
+        # *before* process_object is called with their results.
+        task = delayed(process_object)(obj, mask_slice, image_slice, optimal_lmax)
+        tasks.append(task)
+
+    # 2. Submit the entire graph of tasks to the cluster at once.
+    #    client.compute is non-blocking and returns futures immediately.
+    logger.info(f"Submitting {len(tasks)} tasks to the cluster...")
+    futures = client.compute(tasks)
+
+    # 3. Gather results as they complete (this part is great, no changes needed).
+    #    Add a progress bar for better user experience.
+    logger.info("Gathering results as they complete...")
+
+    
+    results = client.gather(futures) # Gather all results after they are complete.
+    
+    # Filter out None results from skipped or failed objects
     return [r for r in results if r is not None]
 
 def parse_list_string(list_str, dtype=int):
@@ -412,9 +396,6 @@ def main():
     parser.add_argument("--input_mask", required=True, help="Path to the input mask Zarr store or TIF file (label image data)")
     parser.add_argument("--output_csv", required=True, help="Path to the output CSV file for features")
     parser.add_argument("--channels", required=True, help="Comma-separated list of channel indices to process (e.g., '0,1,2')")
-
-    # Processing Arguments
-    parser.add_argument("--batch_size", default=10000, help="Batch size for processing")
 
     # Dask SGE Cluster Arguments
     parser.add_argument("--num_workers", type=int, default=16, help="Number of Dask workers (SGE jobs)")
@@ -544,14 +525,14 @@ def main():
 
         # --- Second Pass: Extract Features ---
         data_frames = parallel_processing(
+            client,
             df_bboxes, 
             mask_array, 
             image_array, 
-            optimal_lmax=DEFAULT_LMAX, 
-            batch_size=args.batch_size
+            optimal_lmax=DEFAULT_LMAX
         )
         df_properties = pd.DataFrame(data_frames)
-        df_properties = df_properties.applymap(lambda x: x.item() if hasattr(x, "item") else x)
+        df_properties = df_properties.map(lambda x: x.item() if hasattr(x, "item") else x)
         df_properties.to_csv(args.output_csv, index=False)
         logger.info(f"Finished processing all objects and csv saved.")
     except Exception as e:

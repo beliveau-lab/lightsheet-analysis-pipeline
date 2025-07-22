@@ -19,7 +19,7 @@ We will assume that the raw dataset is stored on disk in .h5 format and has a co
 
 Next, we will set up the config.yaml file. First specify the input directory and .xml path:
 
-**Input/Output Settings (from `config.yaml`)**
+**Input/Output Settings (from `config_template.yaml`)**
 
 -   `input_xml`: The path to the XML metadata file (e.g., `/../../dataset.xml`). Make sure you have write permissions on this file! If not, you can make a copy.
 -   `output_dir`: The folder to output resulting files.
@@ -30,7 +30,7 @@ Next, specify whether you want to reorient the sample. This currently applies th
 #TODO: add custom transform matrix as an option
 
 -   `reorient_sample`: 
-    - `enabled` : Whether to reorient the sample in SHIFT-Y view.
+    - `enabled` : Whether to reorient the sample in SHIFT-Y view. Values are True or False.
 
 
 Next, we need to specify the BigStitcher-Spark installation directory:
@@ -162,4 +162,5 @@ To perform a dry run of the pipeline, you can modify the submit_snakemake.sh scr
 - TODO: discuss spark and dask dashboard access
 - TODO: add an environment.yaml file to the repo
 - TODO: add dry run command line option to submit_snakemake.sh
+- TODO: add information to run_pipeline.sh to run the pipeline with a single command
 
