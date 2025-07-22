@@ -1,21 +1,6 @@
-""" This script will be used to select an optimal lmax value via bootstrapping.
-
-The script will:
-1. Load the mask and find objects
-2. For each lmax value:
-    a. Compute the spherical harmonics coefficients for each object for each lmax value (computationally expensive)
-    b. Compute the reconstruction error for each object using the mean distance between the original and reconstructed meshes
-        - code taken from Allen
-    c. store in a dictionary
-3. Run bootstrap test on precomputed errors. 
-4. Find elbow point and return final lmax value
-
-Author: Madison Sanchez-Forman
-Affiliation: University of Washington - Beliveau Labs
-"""
 # -- standard library --
 import logging
-
+import time
 # -- third-party --
 import numpy as np
 import pandas as pd
@@ -26,6 +11,7 @@ from aicsshparam import shtools, shparam
 from dask import compute, delayed
 from vtk.util import numpy_support as vtknp
 import scipy.spatial as spatial
+from matplotlib.ticker import FormatStrFormatter
 
 # -- local --
 import align_3d as align
@@ -53,11 +39,11 @@ def compute_mean_distances(obj, mask_slice, min_volume, lmax_range, sampling_rat
 
     Params
     ------
-        obj: pandas series containing the object id and bounding box
-        mask_slice: sparse array containing the object mask
-        min_volume: minimum volume of the object
-        lmax_range: list of lmax values to compute the reconstruction error for
-        sampling_rate: sampling rate of the microscope in um/pixel
+    obj: pandas series containing the object id and bounding box
+    mask_slice: sparse array containing the object mask
+    min_volume: minimum volume of the object
+    lmax_range: list of lmax values to compute the reconstruction error for
+    sampling_rate: sampling rate of the microscope in um/pixel
 
     Returns
     -------
@@ -65,16 +51,14 @@ def compute_mean_distances(obj, mask_slice, min_volume, lmax_range, sampling_rat
     """
     obj_id = int(obj.name)
     obj_results = {'id': obj_id, 'distances': {}}
-    
     label_slice = np.where(mask_slice == obj_id, mask_slice, 0)
     if np.sum(label_slice > 0) < min_volume:
         logger.debug(f"Object {obj_id} is too small")
         return None
     try:
-        aligned_obj, _ = align.align_object(label_slice, {})
         for lmax in lmax_range:
             (_, grid_rec), (_, mesh, _, _) = shparam.get_shcoeffs(
-                aligned_obj, lmax=lmax, alignment_2d=False
+                label_slice, lmax=lmax, alignment_2d=False
             )
             # Compute reconstruction error
             mesh_rec = shtools.get_reconstruction_from_grid(grid_rec)
@@ -89,7 +73,8 @@ def compute_mean_distances(obj, mask_slice, min_volume, lmax_range, sampling_rat
         logger.debug(f"Failed to process object {obj.name}: {e}")
         return None
         
-class BootstrapLMAX:
+class ValidateLMAX:
+    """ Driver Class for running parallel computation """
     def __init__(self, params):
         self.params = params
         self.client = None
@@ -98,27 +83,21 @@ class BootstrapLMAX:
             range(self.params['lmax_min'], self.params['lmax_max'], 4)
         )
         
-    def select_optimal_lmax(self, mask_path):
+    def run_analysis(self, mask_path, plot_results=False):
         try:
-            # Setup distributed computing
+            start_time = time.time()
             if self.params.get('use_dask', True):
                 self._setup_dask()
             
             self.mask_path = mask_path
-
             mask_array, df_bboxes = self._load_data(mask_path)
             object_errors = self.run_computation(mask_array, df_bboxes)
-            if len(object_errors) < MIN_RELIABLE_OBJECTS:
-                logger.warning(f"Only {len(object_errors)} objects found. Results may be unreliable.")
-            logger.info(f"Computed errors for {len(object_errors)} objects. Running bootstrap test...")
-
-            # Run bootstrap test
-            results = self.run_bootstrap(object_errors)
-            chosen_lmax = self.get_elbow_point(results)
-            logger.info(f"Chosen lmax: {chosen_lmax}")
-            self.plot_results(results, chosen_lmax)
-            return chosen_lmax
-        
+            logger.info(f"Computed errors for {len(object_errors)} objects.")
+            if plot_results:
+                self.plot_reconstruction_error(object_errors, reference_lmax=None)
+            end_time = time.time()
+            logger.info(f"Time taken: {end_time - start_time} seconds")
+            return 
         finally:
             # Always cleanup
             if self.client:
@@ -148,7 +127,8 @@ class BootstrapLMAX:
         logger.info("Creating delayed tasks for object pre-processing...")
         batch_size = self.params['batch_size']
         n_sample = self.params['sample_size']
-        sample = df_bboxes.sample(n_sample, random_state=42)
+        # sample = df_bboxes.sample(n_sample, random_state=42)
+        sample = df_bboxes.sample(n_sample)
         logger.info(f"Sampled {len(sample)} objects")
         n_batches = len(sample) // batch_size
 
@@ -178,108 +158,179 @@ class BootstrapLMAX:
         logger.info(f"Found {len(results)} objects")
         return [r for r in results if r is not None]
 
-    def run_bootstrap(self, object_errors):
-        """Fixed bootstrap selection."""
-        error_dict = {obj['id']: obj['distances'] for obj in object_errors}
-        object_ids = list(error_dict.keys())
-        if len(object_ids) < MIN_RELIABLE_OBJECTS:
-            logger.warning("Too few objects for reliable bootstrap")
+    # def run_bootstrap(self, object_errors):
+    #     """Fixed bootstrap selection."""
+    #     error_dict = {obj['id']: obj['distances'] for obj in object_errors}
+    #     object_ids = list(error_dict.keys())
+    #     if len(object_ids) < MIN_RELIABLE_OBJECTS:
+    #         logger.warning("Too few objects for reliable bootstrap")
 
-        results = {}
-        for lmax in self.lmax_range:
-            bootstrap_errors = []
+    #     # Create detailed reconstruction error plots
+    #     logger.info("Creating detailed reconstruction error plots...")
+    #     self.make_reconstruction_error_plots(object_errors)
+
+    #     results = {}
+    #     for lmax in self.lmax_range:
+    #         bootstrap_errors = []
             
-            # objects that have data for this lmax
-            valid_errors = [
-                obj_id for obj_id in object_ids 
-                if lmax in error_dict[obj_id]
-            ]
+    #         # objects that have data for this lmax
+    #         valid_errors = [
+    #             obj_id for obj_id in object_ids 
+    #             if lmax in error_dict[obj_id]
+    #         ]
             
-            if len(valid_errors) < 10:
-                logger.warning(f"Too few objects for lmax {lmax}")
-                continue
+    #         if len(valid_errors) < 10:
+    #             logger.warning(f"Too few objects for lmax {lmax}")
+    #             continue
                 
-            sample_errors = []
-            for _ in range(self.params['n_iter']):
-                bootstrap_sample = np.random.choice(valid_errors, size=len(valid_errors), replace=True)                
-                sample_errors = [error_dict[obj_id][lmax] * self.params['sampling_rate'] 
-                                for obj_id in bootstrap_sample]
-                bootstrap_errors.append(np.mean(sample_errors))
+    #         # Perform bootstrap sampling
+    #         for _ in range(self.params['n_iter']):
+    #             bootstrap_sample = np.random.choice(valid_errors, size=len(valid_errors), replace=True)                
+    #             sample_errors = [error_dict[obj_id][lmax] 
+    #                             for obj_id in bootstrap_sample]
+    #             bootstrap_errors.append(np.mean(sample_errors))
+            
 
-            results[lmax] = {
-                'mean_distance': np.mean(bootstrap_errors),
-                'std_distance': np.std(bootstrap_errors),
-                'bootstrap_errors': bootstrap_errors,  # Store for significance testing
-                'n_objects': len(valid_errors),
-                'confidence_interval': {
-                    'lower': np.percentile(bootstrap_errors, 2.5),
-                    'upper': np.percentile(bootstrap_errors, 97.5),
-                    'level': 0.95
-                }
-            }
-        return results
+    #         results[lmax] = {
+    #             'mean_distance': np.mean(bootstrap_errors),
+    #             'std_distance': np.std(bootstrap_errors),
+    #             'bootstrap_errors': bootstrap_errors,  # Store for significance testing
+    #             'n_objects': len(valid_errors),
+    #             'confidence_interval': {
+    #                 'lower': np.percentile(bootstrap_errors, 2.5),
+    #                 'upper': np.percentile(bootstrap_errors, 97.5),
+    #                 'level': 0.95
+    #             }
+    #         }
+    #     return results
     
-    def get_elbow_point(self, bootstrap_results, use_confidence_intervals=False):
-        lmax_values = np.array(sorted(bootstrap_results.keys()))
-        if use_confidence_intervals:
-            errors = np.array([bootstrap_results[lmax]['confidence_interval']['lower'] for lmax in lmax_values])
-        else:
-            errors = np.array([bootstrap_results[lmax]['mean_distance'] for lmax in lmax_values])
+    # def plot_bootstrap(self, results, chosen_lmax=None):
+    #     """Plot bootstrap results with confidence intervals."""
+    #     plot_data = []
+    #     for lmax, stats in results.items():
+    #         plot_data.append({
+    #             'lmax': lmax,
+    #             'mean_distance': stats['mean_distance'],
+    #             'lower_ci': stats['confidence_interval']['lower'],
+    #             'upper_ci': stats['confidence_interval']['upper']
+    #         })
         
-        if len(lmax_values) < 3:
-            logger.warning("Need at least 3 lmax values for second derivative")
-            return lmax_values[0]
-        
-        first_derivative = np.gradient(errors, lmax_values)
-        second_derivative = np.gradient(first_derivative, lmax_values)
-        
-        # Note: We want the most positive because errors are decreasing,
-        # so we're looking for where the rate of decrease slows down most
-        elbow_idx = np.argmax(second_derivative)
-        chosen_lmax = lmax_values[elbow_idx]
-        return chosen_lmax
-        
-    def plot_results(self, results, chosen_lmax):
-        """Plot bootstrap results with confidence intervals."""
-        plot_data = []
-        for lmax, stats in results.items():
-            plot_data.append({
-                'lmax': lmax,
-                'mean_distance': stats['mean_distance'],
-                'lower_ci': stats['confidence_interval']['lower'],
-                'upper_ci': stats['confidence_interval']['upper']
-            })
-        
-        df = pd.DataFrame(plot_data)
-        plt.figure(figsize=(10, 6))
-        sns.lineplot(data=df, 
-                     x='lmax', 
-                     y='mean_distance', 
-                     marker='o', 
-                     linewidth=2, 
-                     markersize=8)
-        
-        # Add confidence intervals
-        plt.fill_between(df['lmax'], 
-                        df['lower_ci'], 
-                        df['upper_ci'], 
-                        alpha=0.3, 
-                        label='95% CI')
+    #     df = pd.DataFrame(plot_data)
+    #     plt.figure(figsize=(10, 6))
+    #     ax = sns.lineplot(data=df, 
+    #                  x='lmax', 
+    #                  y='mean_distance', 
+    #                  marker='o', 
+    #                  linewidth=2, 
+    #                  markersize=8)
+    #     ax.set_yscale('log')
 
-        # Highlight chosen lmax
-        # plt.axvline(chosen_lmax, 
-        #             color='red', 
-        #             linestyle='--', 
-        #             linewidth=2,
-        #             label=f'Chosen lmax = {chosen_lmax}')
-        plt.xlabel('lmax (Number of Coefficients)', fontsize=12)
-        plt.ylabel('Mean Distance (μm)', fontsize=12)
-        plt.title('Reconstruction Error', fontsize=14)
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        sns.despine()
+        
+    #     # Add confidence intervals
+    #     plt.fill_between(df['lmax'], 
+    #                     df['lower_ci'], 
+    #                     df['upper_ci'], 
+    #                     alpha=0.3, 
+    #                     label='95% CI')
+
+    #     if chosen_lmax is not None:
+    #         plt.axvline(chosen_lmax, 
+    #                     color='red', 
+    #                     linestyle='--', 
+    #                     linewidth=2,
+    #                     label=f'Chosen lmax = {chosen_lmax}')
+
+    #     plt.xlabel('LMAX', fontsize=12)
+    #     plt.ylabel('Mean Distance to Closest Point (μm)', fontsize=12)
+    #     plt.title('Reconstruction Error', fontsize=14)
+    #     plt.legend()
+    #     plt.grid(True, alpha=0.3)
+    #     sns.despine()
+    #     plt.tight_layout()
+    #     plt.savefig(f'{self.params["save_dir"]}/bootstrap_results.png')
+
+    def plot_reconstruction_error(self, object_errors, reference_lmax=None):        
+        # --- Data Prep ---
+        plot_data = []
+        for obj in object_errors:
+            obj_id = obj['id']
+            for lmax, error in obj['distances'].items():
+                plot_data.append({
+                    'object_id': obj_id,
+                    'lmax': lmax,
+                    'error': error
+                })
+        
+        df_plot = pd.DataFrame(plot_data)
+        df_plot.to_csv(f'{self.params["save_dir"]}/object_reconstruction_errors.csv', index=False)
+        logger.info(f"Saved object reconstruction errors to {self.params['save_dir']}/object_reconstruction_errors.csv")
+
+        fig, ax = plt.subplots(1, 1, figsize=(4, 3))
+        
+        # --- Individual Object Curves in Gray ---
+        for obj_id in df_plot['object_id'].unique():
+            obj_data = df_plot[df_plot['object_id'] == obj_id].sort_values('lmax')
+            x_values = (obj_data['lmax'] + 1) ** 2
+            ax.plot(x_values, 
+                    obj_data['error'], 
+                    '-', 
+                    color='gray', 
+                    linewidth=0.2, 
+                    alpha=0.5)
+        
+        # --- Aggregated Statistics ---
+        df_agg = (df_plot.groupby('lmax')['error']
+                  .agg(['mean', 'std'])
+                  .reset_index()
+                  .sort_values('lmax'))
+        x_agg = (df_agg['lmax'] + 1) ** 2
+
+        # Mean line
+        ax.plot(x_agg, 
+                df_agg['mean'], 
+                '-', 
+                color='k', 
+                linewidth=2, 
+                label='Mean')
+        
+        # Standard deviation band
+        ax.fill_between(x_agg, 
+                       df_agg['mean'] - df_agg['std'],
+                       df_agg['mean'] + df_agg['std'],
+                       alpha=0.3, color='black', label='±1 STD')
+        
+        # --- Axis Formatting ---
+        ax.set_yscale('log')
+        # ax.set_ylim(0.1, 10.0)
+        max_lmax = df_plot['lmax'].max()
+        ax.set_xlim(1, (max_lmax + 1) ** 2)
+        ax.set_yticks([1, 2, 3, 4, 5, 6, 8, 10])
+        ax.set_yticklabels(['1.0', '2.0', '3.0', '4.0', '5.0', '6.0', '8.0', '10.0'])
+    
+        # ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+        
+        # --- Reference Line and Title ---
+        if reference_lmax is not None:
+            x_ref = (reference_lmax + 1) ** 2
+            ax.axvline(x=x_ref, 
+                       color='red', 
+                       linestyle='--', 
+                       alpha=0.7, 
+                      label=f'L={reference_lmax}')
+
+        title = f"Reconstruction Error vs L (n={self.params['sample_size']})"
+    
+        # --- Final Formatting ---
+        ax.set_title(title)
+        ax.set_xlabel('L (SHE order)')
+        ax.set_ylabel('Mean distance to closest point (μm)')
         plt.tight_layout()
-        plt.savefig(f'{self.params["save_dir"]}/bootstrap_results.png')
+        
+        # --- Save Plot ---
+        save_path = f'{self.params["save_dir"]}/reconstruction_error.png'
+        # plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path)
+        return fig
 
     def _setup_dask(self):
         """Setup Dask SGE cluster for distributed processing."""
@@ -319,27 +370,26 @@ def main():
     mask_path = '/net/beliveau/vol2/instrument/E9.5_290/Zoom_290_subset_test/dataset_fused_masks_cpsamr5.zarr'
     params = {
     # -- dask parameters --
-    "num_workers": 1,
-    "cpu_memory": "512G", 
-    "cpu_cores": 16,
-    "cpu_processes": 32,
-    "cpu_resource_spec": "mfree=32G",  
+    "num_workers": 2,
+    "cpu_memory": "256G", 
+    "cpu_cores": 8,
+    "cpu_processes": 16, # 2 proc per core
+    "cpu_resource_spec": "mfree=16G",  # RAM/worker = RAM/core * cores/worker (16G/core * 1 core/2 proc = 8G/proc)
     # -- computation parameters --
-    "sample_size": 1500,
+    "sample_size": 1200,
     "sampling_rate": 2.752,
     "min_size": 4000,
     "lmax_min": 4,
-    "lmax_max": 80,
+    "lmax_max": 40,
     "batch_size": 100,
     "n_iter": 1000,
     # -- tracking parameters --
     'use_dask': True,
     "log_dir" : '/net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/logs/choose_lmax/',
-    "save_dir": '/net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/',
+    "save_dir": '/net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/figures/',
     "dashboard_port": ":41263"
     }
-    bootstrapper = BootstrapLMAX(params)
-    results = bootstrapper.select_optimal_lmax(mask_path)
+    ValidateLMAX(params).run_analysis(mask_path, plot_results=True)
 
 if __name__ == "__main__":
     main()
