@@ -62,7 +62,8 @@ dask:
   total_cpu_memory: "128G"
   RAM_per_core: "32G"
   cpu_processes: 8
-
+  dashboard_port: ":12345"
+  
 # Segmentation parameters
 segmentation:
   output_suffix: "_masks.zarr"

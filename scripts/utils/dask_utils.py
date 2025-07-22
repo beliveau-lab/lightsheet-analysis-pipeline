@@ -23,7 +23,7 @@ def setup_dask_sge_cluster(
     resource_spec: str | None = None,
     log_directory: str | None = None,
     conda_env: str | None = "dask-cellpose", # Default env name
-    dashboard_port: str | None = None,
+    dashboard_port: str | None = ":12345",
     **kwargs # For extra SGECluster or dask config options
 ):
     """
