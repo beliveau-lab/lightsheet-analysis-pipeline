@@ -953,6 +953,7 @@ def main():
             resource_spec=snakemake.resources.gpu_resource_spec,
             log_dir=snakemake.config['dask'].get('log_dir', None), # Reuse dask log dir
             conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "otls-pipeline",
+            dashboard_port=snakemake.resources.dashboard_port
         )
     else:
         logger.info("Parsing command-line arguments.")
@@ -985,7 +986,8 @@ def main():
             runtime=args.runtime,
             resource_spec=args.resource_spec,
             log_directory=args.log_dir + "/segmentation/dask_worker_logs_" + datetime.datetime.now().strftime('%Y%m%d_%H%M%S'),
-            conda_env=args.conda_env
+            conda_env=args.conda_env,
+            dashboard_port=args.dashboard_port
         )
     except Exception as e:
         logger.error(f"Failed to set up Dask cluster: {e}", exc_info=True)
