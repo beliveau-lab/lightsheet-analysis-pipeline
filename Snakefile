@@ -486,7 +486,7 @@ rule destripe:
         project=config["dask"]["gpu_project"], # SGE project
         queue=config["dask"]["gpu_queue"],
         num_workers=config["dask"]["num_gpu_workers"],
-        mem_per_worker=config["dask"].get("gpu_memory", "12G"),
+        mem_per_worker=config["dask"].get("total_gpu_memory", "12G"),
         cores_per_worker=config["dask"].get("gpu_cores", 1),
         resource_spec=config["dask"].get("gpu_resource_spec", "gpgpu=1,cuda=1"),
         processes=config["dask"].get("gpu_processes", 2),
@@ -520,6 +520,6 @@ rule feature_extraction:
         processes=config["dask"].get("cpu_processes", 2),
         dashboard_port=config["dask"]["dashboard_port"]
     conda:
-        "otls-pipeline"
+        "otls-pipeline-cp3"
     script:
         "scripts/feature_extraction.py"
