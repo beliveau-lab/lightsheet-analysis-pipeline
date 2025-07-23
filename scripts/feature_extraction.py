@@ -308,7 +308,7 @@ def process_object(obj, mask_da, image_da, optimal_lmax=4):
         cp_model = CellposeModel(model_type='cyto3', gpu=True)
         
         # cellpose embedding generation #
-        sni = np.max(image_da[:, :, :, 2], axis=0)
+        sni = np.max(aligned_slice, axis=0)
         masks, flows, embedding = cp_model.eval(sni, diameter=None, do_3D=False, compute_masks=False)
         embedding_dict = {f'e{i}': val for i, val in enumerate(embedding)}
 

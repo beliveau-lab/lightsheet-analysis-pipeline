@@ -1,6 +1,6 @@
 #!/bin/bash
 #$ -N otls_pipeline
-#$ -l mfree=256G
+#$ -l mfree=25G
 #$ -pe serial 1
 #$ -j y
 #$ -o /net/beliveau/vol1/project/Nico/OTLS/snakemake.log

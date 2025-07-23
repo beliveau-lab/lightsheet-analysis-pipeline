@@ -493,6 +493,8 @@ rule destripe:
         "otls-pipeline"
     script:
         "scripts/destripe.py"
+
+
 rule feature_extraction:
     input:
         img_zarr=DESTRIPE_ZARR,
@@ -516,6 +518,6 @@ rule feature_extraction:
         resource_spec=config["dask"].get("RAM_per_core", "mfree=8G"),
         processes=config["dask"].get("cpu_processes", 2)
     conda:
-        "otls-pipeline-cp3"
+        "envs/cp3-test.yaml"
     script:
         "scripts/feature_extraction.py"
