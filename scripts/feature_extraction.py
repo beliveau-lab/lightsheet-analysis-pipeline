@@ -18,6 +18,7 @@ import msgpack
 import skimage
 from aicsshparam import shparam
 import torch
+from dask.distributed import as_completed
 
 # Suppress aicsshparam warnings globally for all workers
 warnings.filterwarnings("ignore", message="Mesh centroid seems to fall outside the object.*", module="aicsshparam")
@@ -262,10 +263,10 @@ def process_object(obj, mask_da, image_da, optimal_lmax=4):
     # Suppress aicsshparam warnings that occur for every object
     warnings.filterwarnings("ignore", message="Mesh centroid seems to fall outside the object.*", module="aicsshparam")
 
-    obj_id = int(obj.name)
-    slice_z = obj[0]
-    slice_y = obj[1] 
-    slice_x = obj[2]
+    obj_id = obj.Index
+    slice_z = obj._1
+    slice_y = obj._2
+    slice_x = obj._3
 
     # Compute centroid of object (in global coordinates)
     centroid_z = slice_z.start + (slice_z.stop - slice_z.start) // 2
@@ -328,45 +329,54 @@ def process_object(obj, mask_da, image_da, optimal_lmax=4):
         return None
 
 
-def parallel_processing(client, objects_df, mask_da, image_da, optimal_lmax):
+def parallel_processing(client, objects_df, mask_da, image_da, optimal_lmax, output_csv_path):
     """
-    Processes objects in parallel using dask.delayed to build a precise task graph.
+    Processes objects in parallel, streaming the results directly to a CSV file
+    to avoid collecting them in client memory.
     """
-    
-    # 1. Create a list of Dask Delayed objects
-    #    Each object represents one full "process_object" task with its dependencies.
-    #    This loop runs on the client but is very fast as it only builds a graph.
     logger.info("Building the Dask task graph...")
     tasks = []
     for obj in objects_df.itertuples():
-        slice_z = obj[1]
-        slice_y = obj[2]
-        slice_x = obj[3]
+        slice_z = eval(obj[1]) if isinstance(obj[1], str) else obj[1]
+        slice_y = eval(obj[2]) if isinstance(obj[2], str) else obj[2]
+        slice_x = eval(obj[3]) if isinstance(obj[3], str) else obj[3]
 
-        # Get the Dask array slices (these are still just graph nodes)
         mask_slice = mask_da[slice_z, slice_y, slice_x]
         image_slice = image_da[slice_z, slice_y, slice_x]
 
-        # Wrap the function call in dask.delayed.
-        # Dask now understands that mask_slice and image_slice must be computed
-        # *before* process_object is called with their results.
         task = delayed(process_object)(obj, mask_slice, image_slice, optimal_lmax)
         tasks.append(task)
 
-    # 2. Submit the entire graph of tasks to the cluster at once.
-    #    client.compute is non-blocking and returns futures immediately.
     logger.info(f"Submitting {len(tasks)} tasks to the cluster...")
     futures = client.compute(tasks)
-
-    # 3. Gather results as they complete (this part is great, no changes needed).
-    #    Add a progress bar for better user experience.
-    logger.info("Gathering results as they complete...")
-
     
-    results = client.gather(futures) # Gather all results after they are complete.
+    logger.info("Processing results as they complete and streaming to disk...")
+
+    # Make sure the output directory exists
+    os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
     
-    # Filter out None results from skipped or failed objects
-    return [r for r in results if r is not None]
+    # Use as_completed to iterate over futures as they finish
+    # This is the key to managing memory
+    header_written = False
+    for future, result in as_completed(futures, with_results=True):
+        if result is not None:
+            # Convert the single result dictionary to a DataFrame
+            df_single_result = pd.DataFrame([result])
+
+            # Append to CSV
+            # Write header only for the first entry, then append
+            if not header_written:
+                df_single_result.to_csv(output_csv_path, index=False, mode='w')
+                header_written = True
+            else:
+                df_single_result.to_csv(output_csv_path, index=False, mode='a', header=False)
+        
+        # Clean up the future to release memory on the cluster
+        future.release()
+
+    logger.info(f"All objects processed and results saved to {output_csv_path}")
+    # No large list of results is returned, as it's all on disk.
+    return True
 
 def parse_list_string(list_str, dtype=int):
     """Parses comma-separated string into a list of specified type.
@@ -529,11 +539,10 @@ def main():
             df_bboxes, 
             mask_array, 
             image_array, 
-            optimal_lmax=DEFAULT_LMAX
+            optimal_lmax=DEFAULT_LMAX,
+            output_csv_path=args.output_csv
         )
-        df_properties = pd.DataFrame(data_frames)
-        df_properties = df_properties.map(lambda x: x.item() if hasattr(x, "item") else x)
-        df_properties.to_csv(args.output_csv, index=False)
+
         logger.info(f"Finished processing all objects and csv saved.")
     except Exception as e:
         logger.error(f"Error in main processing block: {e}", exc_info=True)

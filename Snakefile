@@ -511,13 +511,13 @@ rule feature_extraction:
     resources:
         # Resources for the Snakemake job submission
         runtime=config["dask"].get("runtime", "1400000"), # Example runtime
-        project=config["dask"]["cpu_project"], # SGE project
-        queue=config["dask"]["cpu_queue"],
-        num_workers=config["dask"]["num_cpu_workers"],
-        mem_per_worker=config["dask"].get("total_cpu_memory", "60G"),
-        cores_per_worker=config["dask"].get("cpu_cores", 1),
-        resource_spec=config["dask"].get("RAM_per_core", "mfree=8G"),
-        processes=config["dask"].get("cpu_processes", 2),
+        project=config["dask"]["gpu_project"], # SGE project
+        queue=config["dask"]["gpu_queue"],
+        num_workers=config["dask"]["num_gpu_workers"],
+        mem_per_worker=config["dask"].get("total_gpu_memory", "60G"),
+        cores_per_worker=config["dask"].get("gpu_cores", 1),
+        resource_spec=config["dask"].get("gpu_resource_spec", "gpgpu=1,cuda=1"),
+        processes=config["dask"].get("gpu_processes", 2),
         dashboard_port=config["dask"]["dashboard_port"]
     conda:
         "otls-pipeline-cp3"
