@@ -317,6 +317,7 @@ def process_object(obj, mask_da, image_da, optimal_lmax=4):
         del masks
         del flows
         del cp_model
+        del sni
         gc.collect()
         
         coeffs.update({'label': obj_id})
@@ -329,53 +330,57 @@ def process_object(obj, mask_da, image_da, optimal_lmax=4):
         return None
 
 
-def parallel_processing(client, objects_df, mask_da, image_da, optimal_lmax, output_csv_path):
+def parallel_processing(client, objects_df, mask_da, image_da, optimal_lmax, output_csv_path, batch_size=1000):
     """
-    Processes objects in parallel, streaming the results directly to a CSV file
-    to avoid collecting them in client memory.
+    Processes objects in parallel using batched submissions to keep the dashboard responsive,
+    while still streaming results directly to disk.
     """
-    logger.info("Building the Dask task graph...")
-    tasks = []
-    for obj in objects_df.itertuples():
-        slice_z = eval(obj[1]) if isinstance(obj[1], str) else obj[1]
-        slice_y = eval(obj[2]) if isinstance(obj[2], str) else obj[2]
-        slice_x = eval(obj[3]) if isinstance(obj[3], str) else obj[3]
-
-        mask_slice = mask_da[slice_z, slice_y, slice_x]
-        image_slice = image_da[slice_z, slice_y, slice_x]
-
-        task = delayed(process_object)(obj, mask_slice, image_slice, optimal_lmax)
-        tasks.append(task)
-
-    logger.info(f"Submitting {len(tasks)} tasks to the cluster...")
-    futures = client.compute(tasks)
-    
-    logger.info("Processing results as they complete and streaming to disk...")
-
-    # Make sure the output directory exists
+    logger.info("Starting batched submission processing...")
     os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
-    
-    # Use as_completed to iterate over futures as they finish
-    # This is the key to managing memory
     header_written = False
-    for future, result in as_completed(futures, with_results=True):
-        if result is not None:
-            # Convert the single result dictionary to a DataFrame
-            df_single_result = pd.DataFrame([result])
 
-            # Append to CSV
-            # Write header only for the first entry, then append
-            if not header_written:
-                df_single_result.to_csv(output_csv_path, index=False, mode='w')
-                header_written = True
-            else:
-                df_single_result.to_csv(output_csv_path, index=False, mode='a', header=False)
+    # Calculate the number of batches
+    num_objects = len(objects_df)
+    num_batches = (num_objects + batch_size - 1) // batch_size
+
+    for i in range(num_batches):
+        start_idx = i * batch_size
+        end_idx = min((i + 1) * batch_size, num_objects)
+        batch_df = objects_df.iloc[start_idx:end_idx]
         
-        # Clean up the future to release memory on the cluster
-        future.release()
+        logger.info(f"--- Processing Batch {i+1}/{num_batches} ({len(batch_df)} objects) ---")
 
-    logger.info(f"All objects processed and results saved to {output_csv_path}")
-    # No large list of results is returned, as it's all on disk.
+        # --- Graph construction for the current batch ---
+        tasks = []
+        for obj in batch_df.itertuples():
+            slice_z = obj[1]
+            slice_y = obj[2]
+            slice_x = obj[3]
+
+            mask_slice = mask_da[slice_z, slice_y, slice_x]
+            image_slice = image_da[slice_z, slice_y, slice_x]
+            task = delayed(process_object)(obj, mask_slice, image_slice, optimal_lmax)
+            tasks.append(task)
+        
+        if not tasks:
+            continue
+
+        # --- Submit ONLY the current batch ---
+        logger.info(f"Submitting batch {i+1} to the cluster...")
+        futures = client.compute(tasks)
+
+        # --- Process this batch's results as they complete ---
+        for future, result in as_completed(futures, with_results=True):
+            if result is not None:
+                df_single_result = pd.DataFrame([result])
+                if not header_written:
+                    df_single_result.to_csv(output_csv_path, index=False, mode='w')
+                    header_written = True
+                else:
+                    df_single_result.to_csv(output_csv_path, index=False, mode='a', header=False)
+            future.release() # Release memory
+
+    logger.info(f"All batches processed and results saved to {output_csv_path}")
     return True
 
 def parse_list_string(list_str, dtype=int):
@@ -540,7 +545,8 @@ def main():
             mask_array, 
             image_array, 
             optimal_lmax=DEFAULT_LMAX,
-            output_csv_path=args.output_csv
+            output_csv_path=args.output_csv,
+            batch_size=args.batch_size
         )
 
         logger.info(f"Finished processing all objects and csv saved.")

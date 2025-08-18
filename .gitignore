@@ -23,3 +23,8 @@ scripts/visualization.py
 config.yaml
 run_pipeline.sh
 submit_snakemake.sh
+__pycache__/
+*.pyc
+.benchmarks/
+workflow/envs/*.lock
+envs/*.lock
