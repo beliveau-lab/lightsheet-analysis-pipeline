@@ -9,6 +9,35 @@ This project is a collection of tools for analyzing light-sheet fluorescence mic
 
 
 
+<h2> Quickstart</h2>
+
+1. Copy and edit a config:
+
+```
+cp config_template.yaml config.yaml
+# edit config.yaml
+```
+
+2. Dry run:
+
+```
+snakemake -n -p --profile profiles/sge --configfile config.yaml
+```
+
+3. Run:
+
+```
+snakemake -p --profile profiles/sge --configfile config.yaml
+```
+
+You can also use the wrapper:
+
+```
+./run_pipeline.sh -n                    # dry run
+./run_pipeline.sh --until rechunk_to_blocks
+./run_pipeline.sh --configfile config.yaml
+```
+
 <h2> Environment Setup and job configuration</h2>
 
 To run this pipeline, you will first need to clone the repo:
@@ -98,22 +127,11 @@ For tasks like segmentation and feature extraction that can be parallelized, the
 -   `dask`: Container for Dask settings.
     -   `log_dir`: Directory where Dask worker logs are saved.
     -   `runtime`: Maximum runtime for Dask worker jobs.
-    -   **GPU Worker Settings:** Controls workers utilizing Graphics Processing Units (GPUs).
-        -   `gpu_project`: SGE project for GPU jobs.
-        -   `gpu_queue`: SGE queue for GPU jobs.
-        -   `num_gpu_workers`: Number of GPU workers to start.
-        -   `gpu_cores`: CPU cores allocated per GPU worker.
-        -   `total_gpu_memory`: System memory (RAM) allocated per GPU worker (e.g., "60G").
-        -   `gpu_resource_spec`: Specific hardware requirements for GPU workers (e.g., requesting 1 GPU, CUDA compatibility, minimum free CPU memory).
-        -   `gpu_processes`: Number of Python processes to run within each GPU worker.
-    -   **CPU Worker Settings:** Controls workers utilizing standard Central Processing Units (CPUs).
-        -   `cpu_project`: SGE project for CPU jobs.
-        -   `cpu_queue`: SGE queue for CPU jobs.
-        -   `num_cpu_workers`: Number of CPU worker processes to start.
-        -   `cpu_cores`: CPU cores allocated per CPU worker.
-        -   `total_cpu_memory`: System memory (RAM) allocated per CPU worker (e.g., "60G"). Set this equal to cpu_cores * RAM_per_core.
-        -   `RAM_per_core`: System memory allocated per CPU core requested.
-        -   `cpu_processes`: Number of Python processes to run within each CPU worker.
+    -   `dashboard_port`: Address for the Dask dashboard.
+    -   `gpu_worker_config`: Settings for GPU workers
+        -   `num_workers`, `processes`, `threads_per_worker`, `memory`, `cores`, `project`, `queue`, `resource_spec`
+    -   `cpu_worker_config`: Settings for CPU workers
+        -   `num_workers`, `processes`, `threads_per_worker`, `memory`, `cores`, `project`, `queue`, `resource_spec`
 
 <h3> Segmentation (from `config.yaml`) </h3>
 
@@ -149,9 +167,9 @@ After segmentation, this step measures various properties (features) of the segm
 
 After configuring the .yaml, you can begin execution of the Snakemake workflow with:
 
-`$ qsub run_pipeline.sh`
+`$ snakemake -p --profile profiles/sge --configfile config.yaml`
 
-You may need to create a conda environment with snakemake installed, and point to it in the submit_snakemake.sh script.
+Environments are managed automatically via `--use-conda` in the profile. If you prefer manual control, create the env from `workflow/envs/*.yml`.
 
 To perform a dry run of the pipeline, you can modify the submit_snakemake.sh script to run snakemake with the -n flag.
 
@@ -159,8 +177,5 @@ To perform a dry run of the pipeline, you can modify the submit_snakemake.sh scr
 
 
 
-- TODO: discuss spark and dask dashboard access
-- TODO: add an environment.yaml file to the repo
-- TODO: add dry run command line option to submit_snakemake.sh
-- TODO: add information to run_pipeline.sh to run the pipeline with a single command
+- Spark logs: `{bigstitcher_script_dir}/logs/spark`. Dask logs: `dask.log_dir`. Snakemake logs: see `logs/` under the output directory.
 

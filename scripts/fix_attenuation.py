@@ -7,20 +7,18 @@ from tifffile import imread
 import zarr
 from time import time
 from utils.dask_utils import setup_dask_sge_cluster, shutdown_dask
-from dask import delayed, compute
+from dask.base import compute
 import dask.array as da
 import logging
 from numcodecs import Blosc
 import sys
 import argparse
-from dask import annotate
+from dask.base import annotate
 import gc
 import dask
 import cupy as cp
-from cucim.skimage import filters as cucim_filters
-from cucim.skimage import exposure as cucim_exposure
-from cupyx.scipy.ndimage import uniform_filter as cupy_uniform_filter
-from cucim.skimage.filters import gaussian as cucim_gaussian
+from dask.distributed import print as dask_print
+
 
 # --- Environment Logging  ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -59,54 +57,7 @@ def load_n5_zarr_array(path, n5_subpath=None, chunks=None):
         raise ValueError(f"Unsupported array format (expected .n5 or .zarr): {path}")
 
 
-# --- GPU-ACCELERATED STRIPE FIX FUNCTION (Copied from the main script) ---
-def stripe_fix_gpu(
-    img,
-    clip_lowhi=(95, 99.99),
-    min_mask_ratio=0.005,
-    tissue_blur_kernel=None,
-    vertical_blur_sigma=None,
-    stripe_smooth_sigma=20
-):
-    # Ensure img is a cupy array.
-    img = cp.asarray(img)
-    img = cp.squeeze(img)
 
-    if tissue_blur_kernel is None:
-        tissue_blur_kernel = img.shape[0] / 100
-    if vertical_blur_sigma is None:
-        vertical_blur_sigma = (img.shape[0] / 100, 0)
-
-    # Step 1: Create tissue mask using GPU operations
-    low_clip = cp.percentile(img, clip_lowhi[0]) / 5
-    high_clip = cp.percentile(img, clip_lowhi[1])
-    img = cp.clip(img, low_clip, high_clip) - low_clip
-    
-    blurred_img = cupy_uniform_filter(img, tissue_blur_kernel)
-    threshold_value = cucim_filters.threshold_otsu(blurred_img)
-    mask = blurred_img > threshold_value
-
-    # Step 2: Stripe profile estimation
-    masked_blurimg = cucim_gaussian(img, sigma=vertical_blur_sigma, preserve_range=True) * mask
-    masked_blurimg_lineprof = cp.sum(masked_blurimg, axis=0)
-    min_mask_pixels = img.shape[0] * min_mask_ratio
-    mask_lineprof = cp.sum(mask, axis=0)
-    col_masked_lineprof = cp.where(
-        mask_lineprof > min_mask_pixels,
-        masked_blurimg_lineprof / mask_lineprof,
-        0
-    )
-    norm_line_prof = cucim_exposure.rescale_intensity(col_masked_lineprof, out_range=(0, 1))
-    stripe = norm_line_prof * mask
-    stripe[stripe == 0] = 1
-    stripe_profile = cucim_gaussian(stripe, sigma=stripe_smooth_sigma, preserve_range=True)
-
-    # Step 3: Stripe correction
-    corrected = img / stripe_profile
-
-    del img, blurred_img, threshold_value, mask, masked_blurimg, masked_blurimg_lineprof, mask_lineprof, col_masked_lineprof, norm_line_prof, stripe, stripe_profile
-    gc.collect()
-    return cp.expand_dims(corrected, axis=0).get()
 
 def parse_list_string(list_str, dtype=int):
     """Parses comma-separated string into a list of specified type.
@@ -180,6 +131,77 @@ def parse_dict_string(dict_str):
             
     return result_dict
 
+def Interpl_8x(metric_array_8x, shape):
+    """
+    Interpolate to the shape of specified resolution data.
+
+    Args:
+    - metric_array_8x (np.ndarray): The metric array of 8x downsampled data.
+
+    Returns:
+    - metric (np.ndarray): The interpolated metric array.
+    """
+
+    img_length = shape[0]
+    n = len(metric_array_8x)
+    x = np.linspace(1,n,n)
+    xvals = np.linspace(1,n,img_length)
+    metric = np.interp(xvals, x, metric_array_8x)
+
+    return metric
+
+def calculate_rescale_lim(img_8x, shape):
+    """
+    Calculate the p2 and p98, min, and mean for the 8x downsampled 3D image.
+
+    Args:
+    - img_8x (np.ndarray): The 8x downsampled volume.
+    - shape (tuple) : shape of selected res volume.
+
+    Returns:
+    - p2 (np.ndarray): Array of 2% min for the highest resolution volume interpolated from 8x downsampled volume.
+    - p98 (np.ndarray): Array of 98% max for the highest resolution volume interpolated from 8x downsampled volume.
+    - global_max (float): The max intensity for the 3D volume.
+    """
+    # img_8x = exposure.adjust_gamma(img_8x, 0.7)
+    
+    p2, p98 = np.percentile(img_8x,
+                            (2, 99.5), 
+                            axis = (1,2)
+                            )
+    p2[-1] = p2[-2]
+    p98[-1] = p98[-2]
+    global_max = np.max(p98)*0.98
+
+    p2 = Interpl_8x(p2, shape)
+    p98 = Interpl_8x(p98, shape)
+
+    return p2, p98, global_max
+
+def contrast_fix(img, p2, p98, global_max, block_info=None):
+    """
+    Rescale the p2 and p98 in the 2D image to the out_range.
+
+    Args:
+    - img (np.ndarray): The 2D image for the layer of interest.
+    - p2 (float):
+    - p98 (float):
+    - global_max (float):
+    - i (int): Index for current layer.
+
+    Returns:
+    - img_rescale (np.ndarray): The rescaled 2D image for that layer.
+    """
+
+    block_index = block_info[0]['array-location']
+    dask_print(f"Processing block at index: {block_index}")
+    # img = exposure.adjust_gamma(img, 0.7)
+    img_rescale = exposure.rescale_intensity(img, 
+                                            in_range=(p2[block_index[0][0]], p98[block_index[0][0]]*1.75), 
+                                            out_range = (0, global_max)
+                                            )
+
+    return np.asarray(img_rescale, dtype=np.uint16)
 
 def main():
     # --- Argument Parsing ---
@@ -252,23 +274,25 @@ def main():
         n5_channel_path = 'ch{}/s0'.format(ch_idx)
         logger.info(f"Loading channel {ch_idx} from zarr path: {args.input_zarr}/{n5_channel_path}")
         dask_arr = da.from_zarr(args.input_zarr, component=f"ch{ch_idx}/s0")
-
+        dask_arr_8x = dask_arr[::8, ::8, ::8]  # Downsample by 8x
         logger.info(f"  Channel {ch_idx} loaded: Shape={dask_arr.shape}, Chunks={dask_arr.chunksize}, Dtype={dask_arr.dtype}")
-        with dask.config.set(resources={"GPU": 1}):
-            logger.info(f"Annotating with resources: {parse_dict_string(args.dask_resources) if args.dask_resources else {}}")
-            corrected_img = da.map_blocks(
-                stripe_fix_gpu, 
-                dask_arr, 
-                dtype=np.uint16
-            )
+        logger.info(f"Annotating with resources: {parse_dict_string(args.dask_resources) if args.dask_resources else {}}")
+        p2, p98, global_max = calculate_rescale_lim(dask_arr_8x, dask_arr.shape)
+        logger.info(f"Running correction with parameters: p2: {p2}, p98: {p98}, global_max: {global_max}")
+        corrected_img = da.map_blocks(
+            contrast_fix, 
+            dask_arr, 
+            p2, p98, global_max,
+            dtype=np.uint16
+        )
 
-            da.to_zarr(
-                corrected_img,
-                url=args.output_zarr,
-                component=f"ch{ch_idx}/s0",        # top-level array
-                compressor=compressor,
-                overwrite=True
-            )
+        da.to_zarr(
+            corrected_img,
+            url=args.output_zarr,
+            component=f"ch{ch_idx}/s0",        # top-level array
+            compressor=compressor,
+            overwrite=True
+        )
 
         logger.info(f"Channel {ch_idx} processed and saved to: {args.output_zarr}")
                     

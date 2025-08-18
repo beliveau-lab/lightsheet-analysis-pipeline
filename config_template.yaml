@@ -1,18 +1,16 @@
 # Input/Output
-input_xml: 
-output_dir:
+input_xml: "/path/to/input.xml"
+output_dir: "/path/to/output"
 
 # Sample reorientation 
 reorient_sample:
-  enabled:
-
+  enabled: True
 
 # BigStitcher-Spark location
 bigstitcher_script_dir: "/net/beliveau/vol1/project/BigStitcher-Spark"
 spark_job_timeout: 43200 # Timeout in seconds for waiting on spark job logs (e.g., 12 hours)
 
 # Spark cluster configuration
-
 spark_cluster:
   runtime: "8:00"  # Runtime in HH:MM format
   n_nodes: 12      # Number of worker nodes
@@ -24,7 +22,7 @@ spark_cluster:
   gb_per_slot: 15
   ram_per_core: "12G"  # Amount of RAM per core for worker processes
   project: "beliveaulab"  # Add additional projects as needed
-#  queue: "beliveau-long.q"    # Optional: specify queue name
+  # queue: "beliveau-long.q"    # Optional: specify queue name
 
 # Stitching parameters
 stitching:
@@ -40,48 +38,62 @@ fusion:
     max: 65535
   data_type: "UINT16"  # Options: UINT8, UINT16
 
-
-
 # Dask configuration
+# Settings for distributed CPU/GPU work (segmentation, destripe, feature extraction)
 dask:
-  log_dir: 
-  runtime: "14000000"
+  runtime: "08:00:00"
+  log_dir: "/path/to/dask_logs"
+  dashboard_port: ":8788"
 
-  gpu_project: "shendure_beliveau"
-  gpu_queue: "shendure-long.q"
-  num_gpu_workers: 24
-  gpu_cores: 1
-  total_gpu_memory: "120G"
-  gpu_resource_spec: "gpgpu=1,cuda=1,mfree=120G"
-  gpu_processes: 1
-  
-  cpu_project: "beliveaulab"
-  cpu_queue: "beliveau-long.q"
-  num_cpu_workers: 1
-  cpu_cores: 64
-  total_cpu_memory: "128G"
-  RAM_per_core: "32G"
-  cpu_processes: 8
-  dashboard_port: ":12345"
-  
+  # GPU-specific worker settings
+  gpu_worker_config:
+    num_workers: 3
+    processes: 1
+    threads_per_worker: 8
+    memory: "120G"
+    cores: 8
+    project: "shendure_beliveau"
+    queue: "shendure-long.q"
+    resource_spec: "gpgpu=1,cuda=1,mfree=15G"
+
+  # CPU-specific worker settings
+  cpu_worker_config:
+    num_workers: 1
+    processes: 8
+    threads_per_worker: 8
+    memory: "512G"
+    cores: 64
+    project: "beliveaulab"
+    queue: "beliveau-long.q"
+    resource_spec: "mfree=8G"
+
 # Segmentation parameters
 segmentation:
   output_suffix: "_masks.zarr"
-  block_size: "512,512,512" # Example
-  eval_kwargs: "{'anisotropy': 1, 'do_3D': True, 'cellprob_threshold': -1, 'batch_size': 128, 'flow_threshold': 0.4, 'normalize': False, 'min_size': 4000, 'z_axis' : 0}" # Example
+  block_size: [512,512,512]
+  eval_kwargs: "{'anisotropy': 1, 'do_3D': True, 'cellprob_threshold': -1, 'batch_size': 128, 'flow_threshold': 0.4, 'normalize': False, 'min_size': 4000, 'z_axis' : 0}"
   cellpose_model_path: "/net/beliveau/vol1/project/VB_Segmentation/subprojects/Tissue_Segmentation_Revisited/models/cellpose_otls/models/otls_r5_sam_a100_lr1e-5"
-  n5_channel_path: "ch2/s0" # Define the path within N5 for segmentation input
+  segmentation_channel: 2
+
+# Rechunk to planes parameters
+rechunk_to_planes:
+  output_suffix: "_rechunked_planes.zarr"
+  channels: [0,1,2]
 
 # Destripe parameters
 destripe:
-  output_suffix: "_destriped.zarr"
+  output_suffix: "_destriped_intermediate.zarr"
   n5_path_pattern: "ch{}/s0"
   channels: [0,1,2]
-  block_size: "512,512,512"
+
+rechunk_to_blocks:
+  output_suffix: "_destriped.zarr"
+  channels: [0,1,2]
+  block_size: [512,512,512]
 
 # Feature extraction parameters
 feature_extraction:
-  output_suffix: "_features.csv"
+  output_suffix: "_features_embds.csv"
   channels: [0,1,2]
-  n5_path_pattern: "ch{}/s0" # Pattern for N5 channels for feature extraction
-  batch_size: 50000
+  n5_path_pattern: "ch{}/s0"
+  batch_size: 20000

@@ -1,0 +1,25 @@
+name: otls-pipeline
+channels: [conda-forge, bioconda, defaults, rapidsai]
+dependencies:
+  - python=3.11
+  - snakemake>=8
+  - dask-jobqueue
+  - dask==2025.2.0
+  - dask-cuda
+  - distributed==2025.2.0
+  - zarr<3.0.0
+  - numpy
+  - scipy
+  - scikit-image
+  - cellpose==4.0.6
+  - pandas
+  - pyyaml
+  - lxml
+  - jedi
+  - cupy
+  - cucim
+  - pip: 
+      - torch
+      - torchvision
+      - torchaudio
+
