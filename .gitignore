@@ -20,7 +20,7 @@ alignment
 dev/
 scripts/visualization.py
 *.ipynb
-config.yaml
+/config.yaml
 run_pipeline.sh
 submit_snakemake.sh
 __pycache__/

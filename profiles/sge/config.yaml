@@ -1,0 +1,15 @@
+executor: local
+latency-wait: 60
+rerun-triggers: mtime
+use-conda: true
+printshellcmds: true
+cores: 1
+restart-times: 0
+jobs: 100
+keep-going: true
+# Note: For running on SGE with Snakemake >= 8, install a cluster executor plugin
+# such as 'snakemake-executor-plugin-cluster-generic' and configure:
+#   executor: cluster-generic
+#   cluster-generic-submit-cmd: "qsub {params}"
+#   cluster-generic-status-cmd: "qstat ..."
+
