@@ -78,12 +78,18 @@ rechunk_to_planes:
 
 # Destripe parameters
 destripe:
-  output_suffix: "_destriped_intermediate.zarr"
+  output_suffix: "_destriped.zarr"
   n5_path_pattern: "ch{}/s0"
   channels: [0,1,2]
 
-rechunk_to_blocks:
+# Fix attenuation parameters
+fix_attenuation:
   output_suffix: "_corrected.zarr"
+  channels: [0,1,2]
+
+# Rechunk to blocks parameters
+rechunk_to_blocks:
+  output_suffix: "_rechunked_blocks.zarr"
   channels: [0,1,2]
   block_size: [512,512,512]
 
