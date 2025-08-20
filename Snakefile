@@ -53,7 +53,7 @@ AFFINE_FUSION_DONE = PIPELINE_OUTPUT_DIR / "affine_fusion.done"
 SEGMENTED_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['segmentation']['output_suffix']}"
 FEATURES_CSV = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['feature_extraction']['output_suffix']}"
 DESTRIPE_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['destripe']['output_suffix']}"
-CORRECTED_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused_corrected.zarr"
+CORRECTED_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['fix_attenuation']['output_suffix']}"
 RECHUNKED_BLOCKS_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['rechunk_to_blocks']['output_suffix']}"
 RECHUNKED_PLANES_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['rechunk_to_planes']['output_suffix']}"
 
@@ -308,7 +308,7 @@ rule attenutation_fix:
     output:
         zarr=maybe_protected(directory(CORRECTED_ZARR))
     params:
-        channels=config["destripe"]["channels"],
+        channels=config["fix_attenuation"]["channels"],
         outdir=lambda w, output: os.path.dirname(output.zarr),
         log_dir=LOG_DIR_STR,
 
@@ -370,21 +370,17 @@ rule feature_extraction:
         log_dir=LOG_DIR_STR,
         n5_path_pattern=config["feature_extraction"].get("n5_path_pattern", "ch{}/s0"),
         channels=config["feature_extraction"].get("channels", "0"),
-        batch_size=config["feature_extraction"].get("batch_size", 10000),
-        generate_embeddings=config["feature_extraction"].get("generate_embeddings", False),
-        output_format=config["feature_extraction"].get("output_format", "csv"),
-        parquet_dir=config["feature_extraction"].get("parquet_dir", None),
-        parquet_engine=config["feature_extraction"].get("parquet_engine", "pyarrow")
+        generate_embeddings=config["feature_extraction"].get("generate_embeddings", False)
     resources:
         # Resources for the Snakemake job submission
         runtime=config["dask"].get("runtime", "1400000"), # Example runtime
-        project=config["dask"]["gpu_worker_config"]["project"], # SGE project
-        queue=config["dask"]["gpu_worker_config"]["queue"],
-        num_workers=config["dask"]["gpu_worker_config"]["num_workers"],
-        mem_per_worker=config["dask"]["gpu_worker_config"]["memory"],
-        cores_per_worker=config["dask"]["gpu_worker_config"]["cores"],
-        resource_spec=config["dask"]["gpu_worker_config"]["resource_spec"],
-        processes=config["dask"]["gpu_worker_config"]["processes"],
+        project=config["dask"]["cpu_worker_config"]["project"], # SGE project
+        queue=config["dask"]["cpu_worker_config"]["queue"],
+        num_workers=config["dask"]["cpu_worker_config"]["num_workers"],
+        mem_per_worker=config["dask"]["cpu_worker_config"]["memory"],
+        cores_per_worker=config["dask"]["cpu_worker_config"]["cores"],
+        resource_spec=config["dask"]["cpu_worker_config"]["resource_spec"],
+        processes=config["dask"]["cpu_worker_config"]["processes"],
         dashboard_port=config["dask"]["dashboard_port"]
     conda:
         "workflow/envs/otls-pipeline-cp3.yml"
