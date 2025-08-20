@@ -194,7 +194,6 @@ def contrast_fix(img, p2, p98, global_max, block_info=None):
     """
 
     block_index = block_info[0]['array-location']
-    dask_print(f"Processing block at index: {block_index}")
     # img = exposure.adjust_gamma(img, 0.7)
     img_rescale = exposure.rescale_intensity(img, 
                                             in_range=(p2[block_index[0][0]], p98[block_index[0][0]]*1.75), 
@@ -278,7 +277,6 @@ def main():
         logger.info(f"  Channel {ch_idx} loaded: Shape={dask_arr.shape}, Chunks={dask_arr.chunksize}, Dtype={dask_arr.dtype}")
         logger.info(f"Annotating with resources: {parse_dict_string(args.dask_resources) if args.dask_resources else {}}")
         p2, p98, global_max = calculate_rescale_lim(dask_arr_8x, dask_arr.shape)
-        logger.info(f"Running correction with parameters: p2: {p2}, p98: {p98}, global_max: {global_max}")
         corrected_img = da.map_blocks(
             contrast_fix, 
             dask_arr, 

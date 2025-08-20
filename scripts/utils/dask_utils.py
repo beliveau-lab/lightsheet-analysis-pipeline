@@ -125,11 +125,11 @@ def setup_dask_sge_cluster(
     client = distributed.Client(cluster)
     logger.info("Scaling cluster...")
     try:
-        cluster.scale(n_workers)
+        cluster.adapt(minimum_jobs=1, maximum_jobs=n_workers)
         logger.info(f"Cluster scale command issued. Waiting for workers (check dashboard).")
 
         # wait for workers to be ready 
-        client.wait_for_workers(n_workers, timeout=600)
+        client.wait_for_workers(1, timeout=600)
         logger.info(f"Successfully connected to {len(client.scheduler_info()['workers'])} workers.")
 
         logger.info(f"Dask dashboard available at: {client.dashboard_link}")
