@@ -371,6 +371,10 @@ rule feature_extraction:
         n5_path_pattern=config["feature_extraction"].get("n5_path_pattern", "ch{}/s0"),
         channels=config["feature_extraction"].get("channels", "0"),
         batch_size=config["feature_extraction"].get("batch_size", 10000),
+        generate_embeddings=config["feature_extraction"].get("generate_embeddings", False),
+        output_format=config["feature_extraction"].get("output_format", "csv"),
+        parquet_dir=config["feature_extraction"].get("parquet_dir", None),
+        parquet_engine=config["feature_extraction"].get("parquet_engine", "pyarrow")
     resources:
         # Resources for the Snakemake job submission
         runtime=config["dask"].get("runtime", "1400000"), # Example runtime
