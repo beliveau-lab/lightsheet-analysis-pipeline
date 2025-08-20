@@ -3,10 +3,10 @@
 CONFIG?=config.yaml
 
 dryrun:
-	snakemake -n -p --profile profiles/sge --configfile $(CONFIG)
+	snakemake -p -n --configfile $(CONFIG)
 
 run:
-	snakemake -p --profile profiles/sge --configfile $(CONFIG)
+	qsub run_pipeline.sh
 
 dag:
 	snakemake --quiet --dag --configfile $(CONFIG) | dot -Tpng > dag.png

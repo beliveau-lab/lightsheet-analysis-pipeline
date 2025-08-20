@@ -41,6 +41,8 @@ DEFAULT_LMAX = 16
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+
 # --- Helper Functions ---
 def to_sparse(block):
     # block is a numpy ndarray here; convert to sparse.COO
@@ -238,106 +240,129 @@ def load_n5_zarr_array(path, n5_subpath=None, chunks=None):
     else:
         raise ValueError(f"Unsupported array format (expected .n5 or .zarr): {path}")
 
-def process_object(obj, mask_da, image_da, optimal_lmax=4):
+
+# def process_batch(batch_df, mask_path, img_path, optimal_lmax, generate_embeddings, channels):
+#     results = []
+#     for obj in batch_df.itertuples():
+#         res = process_object(obj, mask_path, img_path,optimal_lmax, generate_embeddings, channels)
+#         if res is not None:
+#             results.append(res)
+#     return results
+
+def process_object(obj, mask_slice, img_slice, optimal_lmax=4, generate_embeddings=False):
     """
-    Enhanced process_object that includes spherical harmonics computation
+    Process a single object given its bounding box slices.
+    
     Args:
-        obj: pandas.Series
-            A row from the DataFrame containing the object bounding box coordinates
+        obj: pandas.Series (or itertuples row)
+            Contains object ID and slice indices (_1, _2, _3).
         mask_da: dask.array.Array
-            The segmentation mask array (ZYX)
+            The full segmentation mask (ZYX).
         image_da: dask.array.Array
-            The input image array (ZYXC)
+            The full intensity image (ZYXC).
         optimal_lmax: int
-            The optimized lmax value for spherical harmonics computation
+            Maximum degree for spherical harmonics.
+        generate_embeddings: bool
+            Whether to compute embeddings with Cellpose.
+
     Returns:
-        final_dict: dict
-            A dictionary containing the object properties and spherical harmonics coefficients
+        dict with computed features, or None if skipped.
     """
     import sys, os
     import warnings
     sys.path.append(os.path.dirname(__file__))   # path where feature_extraction.py lives
     from aicsshparam import shparam
     import align_3d as align
-    
-    # Suppress aicsshparam warnings that occur for every object
     warnings.filterwarnings("ignore", message="Mesh centroid seems to fall outside the object.*", module="aicsshparam")
 
     obj_id = obj.Index
-    slice_z = obj._1
-    slice_y = obj._2
-    slice_x = obj._3
+    slice_z, slice_y, slice_x = obj._1, obj._2, obj._3
 
-    # Compute centroid of object (in global coordinates)
+
+    
+
+    # Slice from already-open arrays
+
+    # Compute centroid
     centroid_z = slice_z.start + (slice_z.stop - slice_z.start) // 2
     centroid_y = slice_y.start + (slice_y.stop - slice_y.start) // 2
     centroid_x = slice_x.start + (slice_x.stop - slice_x.start) // 2
 
     try:
-        # Get only the pixels belonging to the object of interest
-        label_slice = np.where(mask_da == obj_id, mask_da, 0)
+        # Isolate current object
+        label_slice = np.where(mask_slice == obj_id, mask_slice, 0)
+
         # Basic regionprops
-        props = regionprops_table(label_slice, image_da, properties=["label", 
-                                                                     "area", 
-                                                                     "mean_intensity"])
+        props = regionprops_table(label_slice, img_slice, properties=["label", "area", "mean_intensity"])
         area = props['area'][0]
-        if area < 4000:  # Increase threshold and fix indexing
+        if area < 4000:
             logger.info(f"Object {obj_id} too small (area={area}). Skipping...")
             return None
-        else:
-            logger.info(f"Object {obj_id} is large enough (area={area}). Processing...")
 
-        # Add global centroid coordinates
         props['centroid_z'] = centroid_z
         props['centroid_y'] = centroid_y
         props['centroid_x'] = centroid_x
-        # Align object
-        aligned_slice, props = align.align_object(label_slice, props) # align object also adds features to df_props
-        
-        # Check if aligned object has any foreground voxels
-        if np.sum(aligned_slice) == 0:
-            logger.info(f"Object {obj_id} has no foreground voxels after alignment. Skipping spherical harmonics...")
-            return None
-            
-        # Spherical harmonics computation
-        (coeffs, _), _ = shparam.get_shcoeffs(
-            aligned_slice, 
-            lmax=optimal_lmax,
-            alignment_2d=False)
-        
-        # instantiate cellpose model #
-        cp_model = CellposeModel(model_type='cyto3', gpu=True)
-        
-        # cellpose embedding generation #
-        sni = np.max(image_da[:, :, :, 2], axis=0)
-        masks, flows, embedding = cp_model.eval(sni, diameter=None, do_3D=False, compute_masks=False)
-        embedding_dict = {f'e{i}': val for i, val in enumerate(embedding)}
 
-        # remove garbage to avoid memory leaks #
-        del masks
-        del flows
-        del cp_model
-        del sni
-        gc.collect()
-        
+        # Align object
+        aligned_slice, props = align.align_object(label_slice, props)
+
+        if np.sum(aligned_slice) == 0:
+            logger.info(f"Object {obj_id} has no voxels after alignment. Skipping...")
+            return None
+
+        # Compute spherical harmonics
+        (coeffs, _), _ = shparam.get_shcoeffs(aligned_slice, lmax=optimal_lmax, alignment_2d=False)
         coeffs.update({'label': obj_id})
-        final_dict = props | coeffs | embedding_dict
+
+        if generate_embeddings:
+            cp_model = CellposeModel(model_type='cyto3', gpu=True)
+            sni = np.max(img_slice[:, :, 2], axis=0)
+            _, _, embedding = cp_model.eval(sni, diameter=None, do_3D=False, compute_masks=False)
+            embedding_dict = {f'e{i}': val for i, val in enumerate(embedding)}
+            del cp_model, sni
+            gc.collect()
+            final_dict = props | coeffs | embedding_dict
+        else:
+            final_dict = props | coeffs
+
         logger.info(f"Processed object {obj_id}")
         return final_dict
-    
+
     except Exception as e:
         logger.error(f"Error processing object {obj_id}: {e}", exc_info=True)
         return None
 
 
-def parallel_processing(client, objects_df, mask_da, image_da, optimal_lmax, output_csv_path, batch_size=1000):
+def parallel_processing(
+    client,
+    objects_df,
+    mask_da,
+    image_da,
+    optimal_lmax,
+    output_csv_path,
+    batch_size=1000,
+    generate_embeddings=False,
+    output_format="csv",
+    parquet_dir=None,
+    parquet_engine="pyarrow",
+):
     """
     Processes objects in parallel using batched submissions to keep the dashboard responsive,
     while still streaming results directly to disk.
     """
     logger.info("Starting batched submission processing...")
-    os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
-    header_written = False
+    # Ensure output paths/dirs exist
+    if output_format == "csv":
+        os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
+    elif output_format == "parquet":
+        if parquet_dir is None:
+            parquet_dir = os.path.splitext(output_csv_path)[0] + "_parquet"
+        os.makedirs(parquet_dir, exist_ok=True)
+        logger.info(f"Writing parquet output to directory: {parquet_dir}")
+    else:
+        raise ValueError(f"Unsupported output_format: {output_format}")
+
+    header_written = False  # for CSV
 
     # Calculate the number of batches
     num_objects = len(objects_df)
@@ -350,16 +375,23 @@ def parallel_processing(client, objects_df, mask_da, image_da, optimal_lmax, out
         
         logger.info(f"--- Processing Batch {i+1}/{num_batches} ({len(batch_df)} objects) ---")
 
+
         # --- Graph construction for the current batch ---
         tasks = []
         for obj in batch_df.itertuples():
-            slice_z = obj[1]
-            slice_y = obj[2]
-            slice_x = obj[3]
-
+            slice_z = obj._1
+            slice_y = obj._2
+            slice_x = obj._3
             mask_slice = mask_da[slice_z, slice_y, slice_x]
             image_slice = image_da[slice_z, slice_y, slice_x]
-            task = delayed(process_object)(obj, mask_slice, image_slice, optimal_lmax)
+
+            task = delayed(process_object)(
+                    obj,
+                    mask_slice,
+                    image_slice,
+                    optimal_lmax,
+                    False
+                )
             tasks.append(task)
         
         if not tasks:
@@ -369,19 +401,30 @@ def parallel_processing(client, objects_df, mask_da, image_da, optimal_lmax, out
         logger.info(f"Submitting batch {i+1} to the cluster...")
         futures = client.compute(tasks)
 
-        # --- Process this batch's results as they complete ---
+        # --- Process this batch's results as they complete, but write ONCE per batch ---
+        batch_results = []
         for future, result in as_completed(futures, with_results=True):
             if result is not None:
-                df_single_result = pd.DataFrame([result])
+                batch_results.append(result)
+            future.release()  # Release memory
+
+        # Write aggregated results for this batch
+        if batch_results:
+            df_batch = pd.DataFrame(batch_results)
+            if output_format == "csv":
                 if not header_written:
-                    df_single_result.to_csv(output_csv_path, index=False, mode='w')
+                    df_batch.to_csv(output_csv_path, index=False, mode='w')
                     header_written = True
                 else:
-                    df_single_result.to_csv(output_csv_path, index=False, mode='a', header=False)
-            future.release() # Release memory
+                    df_batch.to_csv(output_csv_path, index=False, mode='a', header=False)
+            else:  # parquet
+                parquet_path = os.path.join(parquet_dir, f"part_batch_{i+1:05d}.parquet")
+                df_batch.to_parquet(parquet_path, index=False, engine=parquet_engine)
 
     logger.info(f"All batches processed and results saved to {output_csv_path}")
     return True
+
+
 
 def parse_list_string(list_str, dtype=int):
     """Parses comma-separated string into a list of specified type.
@@ -411,7 +454,7 @@ def main():
     parser.add_argument("--input_mask", required=True, help="Path to the input mask Zarr store or TIF file (label image data)")
     parser.add_argument("--output_csv", required=True, help="Path to the output CSV file for features")
     parser.add_argument("--channels", required=True, help="Comma-separated list of channel indices to process (e.g., '0,1,2')")
-
+    parser.add_argument("--generate_embeddings", required=True, help="Whether to generate embeddings (True/False)")
     # Dask SGE Cluster Arguments
     parser.add_argument("--num_workers", type=int, default=16, help="Number of Dask workers (SGE jobs)")
     parser.add_argument("--cores_per_worker", type=int, default=1, help="Number of cores per worker")
@@ -423,6 +466,9 @@ def main():
     parser.add_argument("--resource_spec", default="mfree=60G", help="SGE resource specification (e.g., 'mfree=60G')")
     parser.add_argument("--log_dir", default=None, help="Directory for Dask worker logs (defaults to ./dask_worker_logs_TIMESTAMP)")
     parser.add_argument("--conda_env", default="otls-pipeline-cp3", help="Conda environment to activate on workers")
+    parser.add_argument("--output_format", default="csv", help="Output format (csv or parquet)")
+    parser.add_argument("--parquet_dir", default=None, help="Directory for parquet output")
+    parser.add_argument("--parquet_engine", default="pyarrow", help="Parquet engine to use")
 
     # --- Argument Parsing ---
     # Check if running under Snakemake
@@ -436,6 +482,7 @@ def main():
             n5_path_pattern=snakemake.params.get("n5_path_pattern", "ch{}/s0"),
             channels=",".join(map(str, snakemake.params.channels)), # Get channels list from params
             batch_size=snakemake.params.batch_size,
+            generate_embeddings=snakemake.params.get("generate_embeddings", False), # Default to False if not set
             num_workers=snakemake.resources.num_workers,
             cores_per_worker=snakemake.resources.cores_per_worker,
             mem_per_worker=snakemake.resources.mem_per_worker,
@@ -446,7 +493,10 @@ def main():
             resource_spec=snakemake.resources.resource_spec,
             log_dir=snakemake.params.log_dir,
             conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "otls-pipeline-cp3", # Get conda env name if available
-            dashboard_port=snakemake.resources.dashboard_port
+            dashboard_port=snakemake.resources.dashboard_port,
+            output_format=snakemake.params.output_format,
+            parquet_dir=snakemake.params.parquet_dir,
+            parquet_engine=snakemake.params.parquet_engine
         )
     else:
         logger.info("Not running under Snakemake, parsing command-line arguments.")
@@ -496,18 +546,22 @@ def main():
         logger.info(f"Output CSV: {args.output_csv}")
         logger.info(f"Channels: {channels_to_process}")
 
+        # --- Load Mask and Image Arrays ---
 
+        mask_array = load_n5_zarr_array(args.input_mask)
+
+    
         image_array_list = []
         for ch_idx in channels_to_process:
             n5_channel_path = 'ch{}/s0'.format(ch_idx)
             logger.info(f"Loading channel {ch_idx} from N5 path: {args.input_zarr}/{n5_channel_path}")
             try:
-                    dask_arr = da.from_zarr(args.input_zarr + "/" + n5_channel_path)
-                    logger.info(f"  Channel {ch_idx} loaded: Shape={dask_arr.shape}, Chunks={dask_arr.chunksize}, Dtype={dask_arr.dtype}")
-                    image_array_list.append(dask_arr)
+                dask_arr = da.from_zarr(args.input_zarr + "/" + n5_channel_path)
+                logger.info(f"Channel {ch_idx} loaded: Shape={dask_arr.shape}, Chunks={dask_arr.chunksize}, Dtype={dask_arr.dtype}")
+                image_array_list.append(dask_arr)
             except Exception as e:
-                    logger.error(f"Failed to load channel {ch_idx} at path {n5_channel_path}: {e}", exc_info=True)
-                    raise # Re-raise error to stop processing if a channel fails
+                logger.error(f"Failed to load channel {ch_idx} at path {n5_channel_path}: {e}", exc_info=True)
+                raise  # Re-raise error to stop processing if a channel fails
                     
         if not image_array_list:
             raise ValueError("No image channels were successfully loaded.")
@@ -515,8 +569,8 @@ def main():
         # --- Load Mask and Image Arrays ---
 
         image_array = da.stack(image_array_list, axis=3)
-        mask_array = load_n5_zarr_array(args.input_mask)
 
+        logger.info(f"Loaded Image (ZYXC assumed): Shape={image_array.shape}, Dtype={image_array.dtype}")
         logger.info(f"Loaded Mask (ZYX assumed): Shape={mask_array.shape}, Dtype={mask_array.dtype}")
 
         chunk_shape = tuple(c[0] for c in mask_array.chunks)  
@@ -542,11 +596,15 @@ def main():
         data_frames = parallel_processing(
             client,
             df_bboxes, 
-            mask_array, 
-            image_array, 
+            mask_da=mask_array, 
+            image_da=image_array, 
             optimal_lmax=DEFAULT_LMAX,
             output_csv_path=args.output_csv,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
+            generate_embeddings=args.generate_embeddings,
+            output_format=args.output_format,
+            parquet_dir=args.parquet_dir,
+            parquet_engine=args.parquet_engine
         )
 
         logger.info(f"Finished processing all objects and csv saved.")
