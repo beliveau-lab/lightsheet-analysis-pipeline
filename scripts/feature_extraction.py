@@ -26,12 +26,35 @@ import psutil
 from dask import delayed, compute
 from utils.dask_utils import setup_dask_sge_cluster, shutdown_dask
 
-
-from cellpose.models import CellposeModel
-
 sys.path.append(os.path.dirname(__file__))
 import align_3d as align
 from aicsshparam import shparam
+
+# --- Optional PyTorch / VGG19 imports for embeddings ---
+try:
+    import torch  # type: ignore
+except Exception:
+    torch = None  # type: ignore
+
+try:
+    from PIL import Image  # type: ignore
+except Exception:
+    Image = None  # type: ignore
+
+try:
+    from torchvision.models import vgg19, VGG19_Weights  # type: ignore
+    from torchvision.models.feature_extraction import create_feature_extractor  # type: ignore
+    from torchvision import transforms as T  # type: ignore
+    _HAS_TORCHVISION = True
+except Exception:
+    vgg19 = None  # type: ignore
+    VGG19_Weights = None  # type: ignore
+    create_feature_extractor = None  # type: ignore
+    T = None  # type: ignore
+    _HAS_TORCHVISION = False
+
+# Global cache to avoid reinitializing VGG19 repeatedly on a worker
+_VGG_CACHE = {"initialized": False}
 
 # --- Script-specific constants ---
 DEFAULT_LMAX = 16 
@@ -160,7 +183,9 @@ def _process_group(group_df: pd.DataFrame,
                    channels: list,
                    lmax: int,
                    area_min: int,
-                   group_key: tuple) -> pd.DataFrame:
+                   group_key: tuple,
+                   generate_embeddings: bool = False,
+                   embedding_reduce_op: str = "max") -> pd.DataFrame:
     """
     Process a group of labels that share the same storage chunk indices.
 
@@ -226,9 +251,9 @@ def _process_group(group_df: pd.DataFrame,
     morph_df["centroid_x"] = morph_df["centroid_x"] + sx
 
     # Per-channel intensity means via regionprops_table join
+    ch_arrays = []
     if channels:
         # Load intensity channels ROI
-        ch_arrays = []
         for ch in channels:
             ch_path = os.path.join(image_zarr_root, f"ch{ch}", "s0")
             ch_arr = zarr.open(ch_path, mode='r')
@@ -244,6 +269,83 @@ def _process_group(group_df: pd.DataFrame,
 
     # Build bbox map for faster lookup
     bbox_map = group_df.set_index("label")[['z0', 'z1', 'y0', 'y1', 'x0', 'x1']].to_dict('index')
+
+    # --- Lazy VGG19 init utilities (per-worker) ---
+
+    def _get_vgg_components():
+        if not generate_embeddings:
+            return None, None, None, None
+        if _VGG_CACHE.get("initialized", False):
+            return _VGG_CACHE["model"], _VGG_CACHE["feature_extractor"], _VGG_CACHE["preprocess"], _VGG_CACHE["device"]
+        if torch is None or vgg19 is None or Image is None:
+            raise RuntimeError("PyTorch/torchvision/PIL not available for embeddings but generate_embeddings=True")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        try:
+            if _HAS_TORCHVISION and VGG19_Weights is not None:
+                weights = VGG19_Weights.IMAGENET1K_V1
+                model = vgg19(weights=weights).to(device)
+                preprocess = weights.transforms()
+                fe = create_feature_extractor(model, return_nodes={"classifier.4": "embedding"}) if create_feature_extractor is not None else None
+            else:
+                raise RuntimeError("Using fallback VGG19 init path")
+        except Exception:
+            # Fallback init API
+            model = vgg19(pretrained=True).to(device)  # type: ignore[arg-type]
+            if T is None:
+                raise
+            preprocess = T.Compose([
+                T.Resize(256),
+                T.CenterCrop(224),
+                T.ToTensor(),
+                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+            fe = None
+        model.eval()
+        try:
+            torch.set_num_threads(1)
+        except Exception:
+            pass
+        _VGG_CACHE.update({
+            "initialized": True,
+            "model": model,
+            "feature_extractor": fe,
+            "preprocess": preprocess,
+            "device": device,
+        })
+        return model, fe, preprocess, device
+
+    def _nucleus_crop_to_vgg_tensor(image_crop_3d: np.ndarray, preprocess, device, reduce_op: str = "max"):
+        assert image_crop_3d.ndim == 3, "Expected (Z, Y, X) 3D crop"
+        if reduce_op == "max":
+            img2d = np.max(image_crop_3d, axis=0)
+        elif reduce_op == "mean":
+            img2d = np.mean(image_crop_3d, axis=0)
+        else:
+            raise ValueError("reduce_op must be 'max' or 'mean'")
+        img2d = img2d.astype(np.float32)
+        p1, p995 = np.percentile(img2d, [1, 99.5])
+        if p995 <= p1:
+            p1, p995 = float(img2d.min()), float(img2d.max())
+        img2d = np.clip((img2d - p1) / (p995 - p1 + 1e-6), 0.0, 1.0)
+        img8 = (img2d * 255.0).astype(np.uint8)
+        pil = Image.fromarray(img8, mode="L")
+        pil_rgb = pil.convert("RGB")
+        tensor = preprocess(pil_rgb)
+        tensor = tensor.unsqueeze(0)
+        return tensor.to(device)
+
+    def _vgg19_embed(input_tensor, model, feature_extractor):
+        with torch.no_grad():
+            if feature_extractor is not None:
+                _ = model(input_tensor)
+                feats = feature_extractor(input_tensor)["embedding"]
+                return feats
+            # Manual fallback without feature_extractor
+            x = model.features(input_tensor)
+            x = model.avgpool(x)
+            x = torch.flatten(x, 1)
+            emb = model.classifier[:5](x)  # up to and including ReLU
+            return emb
 
     # Compute SH coefficients per object
     results = []
@@ -274,12 +376,37 @@ def _process_group(group_df: pd.DataFrame,
 
         coeffs.update({'label': label_id})
         final_dict = props_dict | coeffs
+
+        # Optional: VGG19 embeddings (4096-dim) on first requested channel, masked by object
+        if generate_embeddings and channels and len(ch_arrays) >= 1:
+            try:
+                # Use the first requested channel for embeddings
+                sub_img = ch_arrays[0][lz0:lz1, ly0:ly1, lx0:lx1]
+                sub_img_masked = np.where(sub, sub_img, 0)
+                model, fe, preprocess, device = _get_vgg_components()
+                if model is None or preprocess is None:
+                    raise RuntimeError("VGG components unavailable")
+                inp = _nucleus_crop_to_vgg_tensor(sub_img_masked, preprocess, device, reduce_op=embedding_reduce_op)
+                feats = _vgg19_embed(inp, model, fe)
+                vec = feats[0].detach().cpu().numpy().astype(np.float16, copy=False)
+                for i in range(int(vec.shape[0])):
+                    final_dict[f"vgg19_emb_{i}"] = vec[i]
+            except Exception as e:
+                logger.error(f"Embedding computation failed for label {label_id}: {e}")
+
         results.append(final_dict)
 
     if not results:
         return pd.DataFrame()
 
     out_df = pd.DataFrame(results)
+    # Ensure embedding columns (if present) are float16
+    emb_cols = [c for c in out_df.columns if isinstance(c, str) and c.startswith("vgg19_emb_")]
+    if emb_cols:
+        try:
+            out_df[emb_cols] = out_df[emb_cols].astype(np.float16)
+        except Exception:
+            pass
     cz, cy, cx = group_key
     out_df["cz"] = int(cz)
     out_df["cy"] = int(cy)
@@ -413,6 +540,8 @@ def main():
         args = parser.parse_args()
 
     channels_to_process = parse_list_string(args.channels)
+    gen_emb_str = str(args.generate_embeddings).strip().lower()
+    generate_embeddings_flag = gen_emb_str in ("1", "true", "t", "yes", "y")
 
     # --- Lmax Parameter ---
     logger.info(f"Using lmax: {DEFAULT_LMAX}")
@@ -494,11 +623,14 @@ def main():
                 channels_to_process,
                 DEFAULT_LMAX,
                 4000,
-                (int(cz), int(cy), int(cx))
+                (int(cz), int(cy), int(cx)),
+                generate_embeddings_flag,
+                "max"
             )
             futures.append(fut)
 
         header_written = False
+        columns_header = None
         write_count = 0
         for fut, res in as_completed(futures, with_results=True):
             try:
@@ -508,9 +640,21 @@ def main():
 
                 else:
                     if not header_written:
+                        # If embeddings are requested, ensure header includes all 4096 embedding cols
+                        if generate_embeddings_flag:
+                            emb_cols = [f"vgg19_emb_{i}" for i in range(4096)]
+                            missing = [c for c in emb_cols if c not in res.columns]
+                            if missing:
+                                for c in missing:
+                                    res[c] = np.nan
+                                # Cast embedding columns to float16
+                                res[emb_cols] = res[emb_cols].astype(np.float16)
+                        columns_header = list(res.columns)
                         res.to_csv(args.output_csv, index=False, mode='w')
                         header_written = True
                     else:
+                        if columns_header is not None:
+                            res = res.reindex(columns=columns_header)
                         res.to_csv(args.output_csv, index=False, mode='a', header=False)
                 write_count += 1
             finally:
