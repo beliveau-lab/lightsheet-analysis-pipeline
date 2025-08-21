@@ -7,9 +7,6 @@ cores: 1
 restart-times: 0
 jobs: 100
 keep-going: true
-# Note: For running on SGE with Snakemake >= 8, install a cluster executor plugin
-# such as 'snakemake-executor-plugin-cluster-generic' and configure:
-#   executor: cluster-generic
-#   cluster-generic-submit-cmd: "qsub {params}"
-#   cluster-generic-status-cmd: "qstat ..."
-
+# Global GPU resources (set to number of GPUs available, gpus=1 will serialize GPU jobs to avoid worker timeouts) #
+resources:
+  gpus: 1

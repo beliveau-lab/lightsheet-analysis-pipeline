@@ -241,7 +241,8 @@ rule segmentation:
         gpu_cores=config["dask"]["gpu_worker_config"]["cores"],
         gpu_queue=config["dask"]["gpu_worker_config"]["queue"],
         gpu_processes=config["dask"]["gpu_worker_config"]["processes"],
-        dashboard_port=config["dask"]["dashboard_port"]
+        dashboard_port=config["dask"]["dashboard_port"],
+        gpus=1
     conda:
         "workflow/envs/otls-pipeline.yml"
     script:
@@ -295,7 +296,8 @@ rule destripe:
         # Common params
         runtime=config["dask"].get("runtime", "1400000"),
         dashboard_port=config["dask"]["dashboard_port"],
-        dask_resources="GPU=1"
+        dask_resources="GPU=1",
+        gpus=1
 
     conda:
         "workflow/envs/otls-pipeline.yml"
@@ -374,6 +376,17 @@ rule feature_extraction:
     resources:
         # Resources for the Snakemake job submission
         runtime=config["dask"].get("runtime", "1400000"), # Example runtime
+
+        #'''RUN ON GPU'''
+        # project=config["dask"]["gpu_worker_config"]["project"], # SGE project
+        # queue=config["dask"]["gpu_worker_config"]["queue"],
+        # num_workers=config["dask"]["gpu_worker_config"]["num_workers"],
+        # mem_per_worker=config["dask"]["gpu_worker_config"]["memory"],
+        # cores_per_worker=config["dask"]["gpu_worker_config"]["cores"],
+        # resource_spec=config["dask"]["gpu_worker_config"]["resource_spec"],
+        # processes=config["dask"]["gpu_worker_config"]["processes"],
+
+        #'''RUN ON CPU'''
         project=config["dask"]["cpu_worker_config"]["project"], # SGE project
         queue=config["dask"]["cpu_worker_config"]["queue"],
         num_workers=config["dask"]["cpu_worker_config"]["num_workers"],
@@ -383,6 +396,6 @@ rule feature_extraction:
         processes=config["dask"]["cpu_worker_config"]["processes"],
         dashboard_port=config["dask"]["dashboard_port"]
     conda:
-        "workflow/envs/otls-pipeline-cp3.yml"
+        "workflow/envs/otls-pipeline.yml"
     script:
         "scripts/feature_extraction.py"
