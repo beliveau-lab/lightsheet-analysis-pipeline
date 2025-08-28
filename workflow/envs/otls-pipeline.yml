@@ -12,14 +12,19 @@ dependencies:
   - scipy
   - scikit-image
   - cellpose==4.0.6
+  - opencv=4.12.0=headless_py311*
+  - libopencv=4.12.0=headless_py311*
+  - openexr=3.3.4
+  - imath=3.1.*
   - pandas
   - pyyaml
   - lxml
   - jedi
   - cupy
   - cucim
+  - sparse
   - pip: 
       - torch
       - torchvision
       - torchaudio
-
+      - aicsshparam
