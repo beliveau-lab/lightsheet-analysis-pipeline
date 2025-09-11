@@ -3,19 +3,23 @@
 #$ -l mfree=256G
 #$ -pe serial 1
 #$ -j y
-#$ -o /net/beliveau/vol1/project/Nico/OTLS/snakemake.log
+#$ -o snakemake.log
 #$ -V
 
-conda activate /net/beliveau/vol1/home/longnic/miniconda3/envs/OTLS
-cd /net/beliveau/vol1/project/Nico/OTLS/lightsheet-analysis-pipeline
+set -euo pipefail
 
-snakemake --unlock
-snakemake \
-    --rerun-triggers mtime \
-    --cores 1 \
-    --latency-wait 60 \
-    --use-conda \
-    -p
+PROJECT_ROOT="/net/beliveau/vol1/project/VB_Segmentation/subprojects/lightsheet-analysis-pipeline"
+cd "$PROJECT_ROOT"
 
+conda activate /net/beliveau/vol1/project/bigly_conda/miniconda3/envs/otls-pipeline
 
-### ALWAYS RUN WITH -n FIRST TO SEE WHICH SNAKEMAKE RULES ARE BEING EXECUTED ###
+# Optional: unlock if a previous run was interrupted
+snakemake --unlock --profile profiles/sge || true
+
+# Run with profile; pass-through args are supported
+snakemake -p --profile profiles/sge "$@"
+
+# Example usages:
+#   ./run_pipeline.sh -n                    # dry run
+#   ./run_pipeline.sh --until rechunk_to_blocks
+#   ./run_pipeline.sh --configfile config.yaml

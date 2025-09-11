@@ -29,59 +29,24 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 cellpose.io.logger_setup()
 
-# def monitor_gpu(log_file):
-#     """Run nvidia-smi and write output to a log file with line buffering."""
-#     # Use stdbuf to force line buffering (Linux/macOS)
-#     proc = subprocess.Popen(
-#         ["stdbuf", "-oL",  # Line buffer stdout
-#          "nvidia-smi",
-#          "--query-gpu=timestamp,memory.used",
-#          "--format=csv",
-#          "-l", "10"],  # Log every 1 second
-#         stdout=subprocess.PIPE,
-#         universal_newlines=True  # Handle text output
-#     )
-
-#     with open(log_file, "w") as f:
-#         for line in proc.stdout:
-#             f.write(line)
-#             f.flush()  # Ensure immediate write
-
-# monitor_thread = Thread(target=monitor_gpu, args=("/net/beliveau/vol1/project/VB_Segmentation/subprojects/OTLS-Analyzer/logs/test_rp_gpu_memory.log",))
-# monitor_thread.daemon = True  # Terminate thread when main program exits
-# monitor_thread.start()
-
-
-# Reduce verbosity of dask logs if desired
-# logging.getLogger('distributed').setLevel(logging.WARNING)
-# logging.getLogger('distributed.worker').setLevel(logging.WARNING)
-# logging.getLogger('distributed.scheduler').setLevel(logging.WARNING)
-# logging.getLogger('distributed.client').setLevel(logging.WARNING)
-
-# Optional: PyTorch configuration
-# torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", 2))) # Use env var if set
 
 ######################## Helper Functions (Parsing, etc.) ######################
 
-def parse_tuple_string(tuple_str, dtype=int):
-    """Parses comma-separated string into a tuple of specified type.
-
-    Parameters
-    ----------
-    tuple_str : str
-        A comma-separated string of integers
-    dtype : type
-        The type to convert the string elements to
-
-    Returns
-    -------
-    tuple : tuple
-        A tuple of the specified type
+def parse_list_string(list_str, dtype=int):
+    """Parses comma-separated string into a list of specified type.
+    
+    Args:
+        list_str: str
+            A comma-separated string of values
+        dtype: type
+            The type to convert the values to
+    Returns:
+        list:
+            A list of values of the specified type
     """
-    if not tuple_str:
-        return ()
-    return tuple(dtype(item.strip()) for item in tuple_str.split(','))
-
+    if not list_str:
+        return []
+    return [dtype(item.strip()) for item in list_str.split(',')]
 
 # Define normalization function using global percentiles
 def normalize_chunk(image, percentile_low, percentile_high, crop=None):
@@ -261,7 +226,7 @@ def process_block(
 
 
     logger.info(f'RUNNING BLOCK: {block_index}\tREGION: {crop}\tInput: {input_zarr_path}')
-
+    logger.info(f"Starting segmentation script with GPU={torch.cuda.is_available()}")
     segmentation = read_preprocess_and_segment(
         input_arr, crop, preprocessing_steps, model_path, model_kwargs, eval_kwargs, global_p99, global_p1
     )
@@ -905,11 +870,12 @@ def get_foreground_mask(input_n5, n5_subpath):
 
 
 def main():
+    
     parser = argparse.ArgumentParser(description="Distributed Cellpose Segmentation")
 
     # Input/Output
     parser.add_argument("--input_n5", required=True, help="Path to input N5 store")
-    parser.add_argument("--n5_channel_path", required=True, help="Path to dataset within N5 store (e.g., ch0/s0)")
+    parser.add_argument("--segmentation_channel", required=True, help="Channel to use for segmentation")
     parser.add_argument("--output_zarr", required=True, help="Path for output Zarr segmentation")
     parser.add_argument("--model_path", required=True, help="Path to pretrained Cellpose model file")
 
@@ -936,12 +902,12 @@ def main():
         logger.info("Running under Snakemake.")
         args = argparse.Namespace(
             input_n5=snakemake.input.n5,
-            n5_channel_path=snakemake.params.n5_channel_path,
+            segmentation_channel=snakemake.params.segmentation_channel,
             output_zarr=snakemake.output.zarr,
-            block_size=snakemake.params.block_size,
+            block_size=",".join(map(str, snakemake.params.block_size)),
             model_path=snakemake.params.model_path,
             eval_kwargs=snakemake.params.eval_kwargs, # Already a string
-            temporary_dir=snakemake.config['dask'].get('log_dir', None), # Use dask log dir for temp? Or specific temp path?
+            temporary_dir=snakemake.params.log_dir, # Use dask log dir for temp? Or specific temp path?
             # Dask params from resources
             num_workers=snakemake.resources.n_gpu_workers,
             cores_per_worker=snakemake.resources.gpu_cores,
@@ -951,7 +917,7 @@ def main():
             queue=snakemake.resources.gpu_queue,
             runtime=str(snakemake.resources.runtime),
             resource_spec=snakemake.resources.gpu_resource_spec,
-            log_dir=snakemake.config['dask'].get('log_dir', None), # Reuse dask log dir
+            log_dir=snakemake.params.log_dir, # Reuse dask log dir
             conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "otls-pipeline",
             dashboard_port=snakemake.resources.dashboard_port
         )
@@ -961,7 +927,7 @@ def main():
 
     # --- Parameter Processing ---
     try:
-        block_size_tuple = parse_tuple_string(args.block_size)
+        block_size_tuple = parse_list_string(args.block_size)
         eval_kwargs_dict = ast.literal_eval(args.eval_kwargs)
         if not isinstance(eval_kwargs_dict, dict):
             raise ValueError("eval_kwargs must be a dictionary string.")
@@ -985,7 +951,7 @@ def main():
             queue=args.queue,
             runtime=args.runtime,
             resource_spec=args.resource_spec,
-            log_directory=args.log_dir + "/segmentation/dask_worker_logs_" + datetime.datetime.now().strftime('%Y%m%d_%H%M%S'),
+            log_directory=args.log_dir,
             conda_env=args.conda_env,
             dashboard_port=args.dashboard_port
         )
@@ -997,17 +963,17 @@ def main():
     try:
         start_time = time.time()
         logger.info("--- Starting Distributed Segmentation ---")
-        logger.info(f"Input N5: {args.input_n5} [{args.n5_channel_path}]")
+        logger.info(f"Input N5: {args.input_n5} + {args.segmentation_channel}")
         logger.info(f"Output Zarr: {args.output_zarr}")
         logger.info(f"Model: {args.model_path}")
         logger.info(f"Block Size: {block_size_tuple}")
 
-        mask = get_foreground_mask(args.input_n5, 'ch2/s4')
+        mask = get_foreground_mask(args.input_n5, f'ch{args.segmentation_channel}/s3')
         # Call distributed_eval (no longer needs cluster_kwargs)
         # It now requires the client
         mask_ref, boxes = distributed_eval(
             input_source=args.input_n5, # Pass path
-            n5_subpath=args.n5_channel_path,
+            n5_subpath=f'ch{args.segmentation_channel}/s0',
             blocksize=block_size_tuple,
             write_path=args.output_zarr,
             model_path=args.model_path,

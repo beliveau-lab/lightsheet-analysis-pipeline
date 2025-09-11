@@ -24,6 +24,7 @@ def setup_dask_sge_cluster(
     log_directory: str | None = None,
     conda_env: str | None = "dask-cellpose", # Default env name
     dashboard_port: str | None = ":12345",
+    resources: bool | None = False,
     **kwargs # For extra SGECluster or dask config options
 ):
     """
@@ -49,7 +50,6 @@ def setup_dask_sge_cluster(
 
     # --- Dask Configuration ---
     dask_config_defaults = {
-        'temporary-directory': os.environ.get('TMPDIR', '/tmp'), # Use TMPDIR if set
         'distributed.comm.timeouts.connect': '3600s',
         'distributed.comm.timeouts.tcp': '3600s',
         "distributed.worker.memory.spill": 0.70,
@@ -111,6 +111,8 @@ def setup_dask_sge_cluster(
         job_script_prologue=prologue,
         scheduler_options={"dashboard_address": dashboard_port},
         job_extra_directives=job_extra,
+        worker_extra_args=["--resources", "GPU=1"] if resources else [],
+        local_directory="$TMPDIR",
         # Add resource_spec if needed and not handled by job_extra
         # resource_spec=resource_spec if not any(rs in ' '.join(job_extra) for rs in ['mfree', 'gpgpu']) else None,
         # Pass remaining kwargs
@@ -123,11 +125,11 @@ def setup_dask_sge_cluster(
     client = distributed.Client(cluster)
     logger.info("Scaling cluster...")
     try:
-        cluster.scale(n_workers)
+        cluster.adapt(minimum_jobs=1, maximum_jobs=n_workers)
         logger.info(f"Cluster scale command issued. Waiting for workers (check dashboard).")
 
         # wait for workers to be ready 
-        client.wait_for_workers(n_workers, timeout=300)
+        client.wait_for_workers(1, timeout=600)
         logger.info(f"Successfully connected to {len(client.scheduler_info()['workers'])} workers.")
 
         logger.info(f"Dask dashboard available at: {client.dashboard_link}")
@@ -179,3 +181,4 @@ def shutdown_dask(cluster, client):
     except Exception as e:
         logger.error(f"Error closing Dask cluster: {e}", exc_info=True)
     logger.info("Dask shutdown complete.") 
+

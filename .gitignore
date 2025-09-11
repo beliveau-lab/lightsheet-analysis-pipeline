@@ -1,7 +1,5 @@
 *logs
 *.log
-test_data/
-*.n5
 *.h5
 *.hdf5
 *.zarr
@@ -11,10 +9,7 @@ test_data/
 *.zarr.tar.bz2
 alignment/BigStitcher-Spark/logs/spark/
 .snakemake/
-test_seg_single_block.ipynb
-launch_gpu_workers.py
 .cursorignore
-alignment
 *__pycache__*
 *.npy
 dev/

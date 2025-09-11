@@ -5,11 +5,8 @@ import sys
 import argparse
 import zarr
 import pandas as pd
-import time
 import logging
 import os
-import gc
-# import dask.distributed as dd # Removed unused import
 import dask
 import cloudpickle
 import platform
@@ -17,7 +14,8 @@ import distributed
 import msgpack
 import skimage
 from aicsshparam import shparam
-import torch
+from dask.distributed import as_completed
+from scipy import ndimage as ndi
 
 # Suppress aicsshparam warnings globally for all workers
 warnings.filterwarnings("ignore", message="Mesh centroid seems to fall outside the object.*", module="aicsshparam")
@@ -27,23 +25,22 @@ from skimage.measure import regionprops, regionprops_table
 import psutil
 from dask import delayed, compute
 from utils.dask_utils import setup_dask_sge_cluster, shutdown_dask
-import sparse
-import dask.dataframe as dd
+
 
 from cellpose.models import CellposeModel
 
 sys.path.append(os.path.dirname(__file__))
 import align_3d as align
+from aicsshparam import shparam
 
 # --- Script-specific constants ---
 DEFAULT_LMAX = 16 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+
 # --- Helper Functions ---
-def to_sparse(block):
-    # block is a numpy ndarray here; convert to sparse.COO
-    return sparse.COO.from_numpy(block)
 
 def _array_chunk_location(block_id, chunks):
     """Pixel coordinate of top left corner of the array chunk."""
@@ -52,135 +49,242 @@ def _array_chunk_location(block_id, chunks):
         array_location.append(sum(chunk[:idx]))
     return tuple(array_location)
 
-def _find_bounding_boxes(x, array_location):
-    """An alternative to scipy.ndimage.find_objects, supporting sparse.COO."""
-    # 1) Extract unique non‑zero labels
-    if isinstance(x, sparse.COO):
-        # sparse.COO.data holds the non-zeros, .coords is shape (ndim, nnz)
-        data   = x.data
-        coords = x.coords
-        # only consider nonzero labels
-        mask   = data != 0
-        unique_vals = np.unique(data[mask])
-    else:
-        unique_vals = np.unique(x)
-        unique_vals = unique_vals[unique_vals != 0]
-
-    # 2) For each label, find its min/max in each dim
-    result = {}
-    for val in unique_vals:
-        if isinstance(x, sparse.COO):
-            # locations of this label in sparse coords
-            sel = np.nonzero(data == val)[0]
-            # for each dim i, coords[i][sel] are the positions
-            positions = [coords[i, sel] for i in range(x.ndim)]
-        else:
-            # numpy fallback
-            positions = np.where(x == val)
-
-        # build nd‑slice shifted by array_location
-        slices = tuple(
-            slice(
-                int(positions[i].min()) + array_location[i],
-                int(positions[i].max()) + 1 + array_location[i]
-            )
-            for i in range(x.ndim)
-        )
-        result[int(val)] = slices
-
-    # 3) turn into a DataFrame with one column per dimension
-    cols = list(range(x.ndim))
-    return pd.DataFrame.from_dict(result, orient='index', columns=cols)
 
 
-def _combine_slices(slices):
+# --- Numeric-only bbox computation per chunk (fast, safe) ---
+def _chunk_bboxes_numeric(block, array_location):
     """
-    Return the union of all slice objects in `slices`.
+    Compute bounding boxes for all labels present in a 3D block.
 
-    Ignores any elements that are not real slice objects.
-    Raises ValueError if, after filtering, no slices remain.
+    Returns a pandas.DataFrame with columns:
+    ['label', 'z0', 'z1', 'y0', 'y1', 'x0', 'x1'] in GLOBAL coordinates.
     """
-    slices = [eval(sl) for sl in slices]
-    # keep only true slice instances
-    good = [sl for sl in slices if isinstance(sl, slice)]
-    
-    if not good:
-        raise ValueError(f"_combine_slices got no slice objects, got: {slices!r}")
-    if len(good) == 1:
-        return good[0]
-    # extract starts & stops
-    starts = [sl.start for sl in good]
-    stops  = [sl.stop  for sl in good]
-    return slice(min(starts), max(stops))
+    block = np.asarray(block)
+    if block.ndim != 3:
+        raise ValueError(f"_chunk_bboxes_numeric expects 3D block, got shape={block.shape}")
 
+    # Background mask
+    nonzero_mask = block != 0
+    if not np.any(nonzero_mask):
+        return pd.DataFrame(columns=["label", "z0", "z1", "y0", "y1", "x0", "x1"])  # empty
 
-def _merge_bounding_boxes(x: pd.DataFrame, ndim: int) -> pd.Series:
-    """
-    Merge bounding‐box slices for one label across multiple chunks.
-    
-    Parameters
-    ----------
-    x : DataFrame
-        Rows all belong to the same label.  Must be indexed by that label,
-        and have columns 0..ndim-1 containing slice objects.
-    ndim : int
-        Number of dimensions.
-    
-    Returns
-    -------
-    Series
-        One row per dimension (0..ndim-1), containing the unioned slice.
-        Series.name is set to the integer label.
-    """
-    # The label is the index value (all rows share the same label).
-    label = x.index[0]
-    
-    data = {}
-    for i in range(ndim):
-        # collect all slices in column i
-        sls = list(x[i])
-        data[i] = _combine_slices(sls)
-    
-    return pd.Series(data=data, index=list(range(ndim)), name=label)
+    # Compact the labels in this block to 1..K using return_inverse to avoid per-label scans
+    nz_vals = block[nonzero_mask]
+    unique_labels, inverse = np.unique(nz_vals, return_inverse=True)
+    compact = np.zeros(block.shape, dtype=np.int32)
+    compact[nonzero_mask] = inverse + 1  # background stays 0, labels are 1..K
+
+    # Find object slices once using compact labeling
+    obj_slices = ndi.find_objects(compact)
+    if obj_slices is None:
+        return pd.DataFrame(columns=["label", "z0", "z1", "y0", "y1", "x0", "x1"])  # empty
+
+    rows = []
+    z_off, y_off, x_off = array_location
+    for idx, slc in enumerate(obj_slices, start=1):
+        if slc is None:
+            continue
+        sz, sy, sx = slc
+        rows.append({
+            "label": int(unique_labels[idx - 1]),
+            "z0": int(sz.start + z_off),
+            "z1": int(sz.stop + z_off),
+            "y0": int(sy.start + y_off),
+            "y1": int(sy.stop + y_off),
+            "x0": int(sx.start + x_off),
+            "x1": int(sx.stop + x_off),
+        })
+
+    return pd.DataFrame(rows, columns=["label", "z0", "z1", "y0", "y1", "x0", "x1"])
 
 
-def find_objects(label_image):
+def compute_bboxes_numeric(mask_da, client):
     """
-    For each chunk of `label_image`, call our chunk‑level _find_bounding_boxes
-    (delayed → pandas.DataFrame), then concatenate them all into one Dask DataFrame
-    and group by label to merge bounding boxes across chunks.
+    Compute global bounding boxes for all labels in mask_da using per-chunk extraction,
+    then merge across chunks with pandas (min/max per label).
     """
-    # 1) build one delayed pandas.DataFrame per chunk
+    logger.info("Computing per-chunk numeric bounding boxes (no slice objects)...")
+    # Build delayed DataFrames, one per chunk
+    delayed_blocks = mask_da.to_delayed()
     delayed_dfs = []
-    for block_id, slc in zip(
-        np.ndindex(*label_image.numblocks),
-        da.core.slices_from_chunks(label_image.chunks)
-    ):
-        chunk = label_image[slc]
-        loc   = _array_chunk_location(block_id, label_image.chunks)
-        delayed_dfs.append(
-            delayed(_find_bounding_boxes)(chunk, loc)
-        )
+    for block_id in np.ndindex(*mask_da.numblocks):
+        loc = _array_chunk_location(block_id, mask_da.chunks)
+        block_delayed = delayed_blocks[block_id]
+        df_delayed = delayed(_chunk_bboxes_numeric)(block_delayed, loc)
+        delayed_dfs.append(df_delayed)
 
-    # 2) turn that list of delayed DataFrames into a single Dask DataFrame
-    #    each “partition” is one chunk’s DataFrame
-    meta = dd.utils.make_meta({i: object for i in range(label_image.ndim)})
-    ddf  = dd.from_delayed(delayed_dfs, meta=meta)
-    # 3) group by the integer label (the index), and merge slices
-    #    _merge_bounding_boxes takes a chunk of rows (all from one label)
-    #    and returns a single Series of slices per dimension
-    result = (
-        ddf
-        .reset_index()              # bring the label (index) into a column
-        .rename(columns={"index": "label"})
-        .groupby("label")
-        .apply(
-            lambda pdf: _merge_bounding_boxes(pdf, label_image.ndim),
-            meta=meta
-        )
-    )
+    logger.info(f"Submitting {len(delayed_dfs)} bbox-chunk tasks...")
+    futures = client.compute(delayed_dfs)
+    dfs = []
+    for fut, res in as_completed(futures, with_results=True):
+        if res is not None and not (isinstance(res, pd.DataFrame) and res.empty):
+            dfs.append(res)
+        fut.release()
 
-    return result
+    if not dfs:
+        raise RuntimeError("No bounding boxes found in mask array.")
+
+    logger.info("Merging per-chunk bounding boxes across chunks...")
+    df_all = pd.concat(dfs, ignore_index=True)
+    # Union bboxes across chunks with min/max
+    agg = {
+        "z0": "min",
+        "z1": "max",
+        "y0": "min",
+        "y1": "max",
+        "x0": "min",
+        "x1": "max",
+    }
+    df_merged = df_all.groupby("label", as_index=False).agg(agg)
+    return df_merged
+
+
+def add_chunk_indices(df_bboxes: pd.DataFrame, chunk_sizes: tuple) -> pd.DataFrame:
+    """
+    Add chunk index columns (cz, cy, cx) using bbox centroid and given chunk sizes.
+    """
+    cz_size, cy_size, cx_size = (int(chunk_sizes[0][0]), int(chunk_sizes[1][0]), int(chunk_sizes[2][0]))
+    cz = ((df_bboxes["z0"] + df_bboxes["z1"]) // 2) // cz_size
+    cy = ((df_bboxes["y0"] + df_bboxes["y1"]) // 2) // cy_size
+    cx = ((df_bboxes["x0"] + df_bboxes["x1"]) // 2) // cx_size
+    df_bboxes = df_bboxes.copy()
+    df_bboxes["cz"] = cz.astype(np.int64)
+    df_bboxes["cy"] = cy.astype(np.int64)
+    df_bboxes["cx"] = cx.astype(np.int64)
+    return df_bboxes
+
+
+def _process_group(group_df: pd.DataFrame,
+                   mask_path: str,
+                   image_zarr_root: str,
+                   channels: list,
+                   lmax: int,
+                   area_min: int,
+                   group_key: tuple) -> pd.DataFrame:
+    """
+    Process a group of labels that share the same storage chunk indices.
+
+    - Read a single super-ROI from mask and image for all labels in the group
+    - Compute morphology features once per label using regionprops_table
+    - Compute per-channel mean intensities via regionprops_table per channel
+    - Compute spherical harmonics per label on aligned binary object mask
+
+    Returns a pandas DataFrame with one row per label in the group.
+    """
+
+    import sys, os
+    import warnings
+    sys.path.append(os.path.dirname(__file__))   # path where feature_extraction.py lives
+    from aicsshparam import shparam
+    import align_3d as align
+    
+    if group_df.empty:
+        return pd.DataFrame()
+
+    labels = group_df["label"].astype(np.int64).tolist()
+    sz = int(group_df["z0"].min()); ez = int(group_df["z1"].max())
+    sy = int(group_df["y0"].min()); ey = int(group_df["y1"].max())
+    sx = int(group_df["x0"].min()); ex = int(group_df["x1"].max())
+
+    # Read ROI directly from Zarr to avoid nested Dask computes
+    if mask_path.endswith('.n5'):
+        store = zarr.N5Store(mask_path)
+        mask_arr = zarr.open_array(store=store, path=None, mode='r')
+    else:
+        mask_arr = zarr.open(mask_path, mode='r')
+
+    mask_roi = np.asarray(mask_arr[sz:ez, sy:ey, sx:ex])
+
+    # Quick exit if no voxels
+    if np.count_nonzero(mask_roi) == 0:
+        return pd.DataFrame()
+
+    # Morphology for all labels; regionprops_table with label image only
+    morph = regionprops_table(mask_roi, properties=["label", "area", "centroid"])
+    morph_df = pd.DataFrame(morph)
+    if morph_df.empty:
+        return pd.DataFrame()
+
+    # Keep only our labels
+    morph_df["label"] = morph_df["label"].astype(np.int64)
+    morph_df = morph_df[morph_df["label"].isin(labels)].copy()
+    if morph_df.empty:
+        return pd.DataFrame()
+
+    # Area threshold (filter tiny objects early)
+    morph_df = morph_df[morph_df["area"] >= area_min]
+    if morph_df.empty:
+        return pd.DataFrame()
+
+    # Convert centroid to global coordinates
+    if "centroid-0" in morph_df.columns:
+        morph_df.rename(columns={"centroid-0": "centroid_z",
+                                 "centroid-1": "centroid_y",
+                                 "centroid-2": "centroid_x"}, inplace=True)
+    morph_df["centroid_z"] = morph_df["centroid_z"] + sz
+    morph_df["centroid_y"] = morph_df["centroid_y"] + sy
+    morph_df["centroid_x"] = morph_df["centroid_x"] + sx
+
+    # Per-channel intensity means via regionprops_table join
+    if channels:
+        # Load intensity channels ROI
+        ch_arrays = []
+        for ch in channels:
+            ch_path = os.path.join(image_zarr_root, f"ch{ch}", "s0")
+            ch_arr = zarr.open(ch_path, mode='r')
+            ch_arrays.append(np.asarray(ch_arr[sz:ez, sy:ey, sx:ex]))
+
+        for idx, ch in enumerate(channels):
+            ch_df = pd.DataFrame(
+                regionprops_table(mask_roi, intensity_image=ch_arrays[idx], properties=["label", "mean_intensity"])  # type: ignore[arg-type]
+            )
+            ch_df["label"] = ch_df["label"].astype(np.int64)
+            ch_df.rename(columns={"mean_intensity": f"mean_intensity_ch{ch}"}, inplace=True)
+            morph_df = morph_df.merge(ch_df, on="label", how="left")
+
+    # Build bbox map for faster lookup
+    bbox_map = group_df.set_index("label")[['z0', 'z1', 'y0', 'y1', 'x0', 'x1']].to_dict('index')
+
+    # Compute SH coefficients per object
+    results = []
+    for _, pr in morph_df.iterrows():
+        label_id = int(pr["label"]) 
+        bbox = bbox_map.get(label_id)
+        if bbox is None:
+            continue
+        lz0 = int(bbox['z0'] - sz); lz1 = int(bbox['z1'] - sz)
+        ly0 = int(bbox['y0'] - sy); ly1 = int(bbox['y1'] - sy)
+        lx0 = int(bbox['x0'] - sx); lx1 = int(bbox['x1'] - sx)
+
+        sub = (mask_roi[lz0:lz1, ly0:ly1, lx0:lx1] == label_id)
+        if not np.any(sub):
+            continue
+        sub = np.ascontiguousarray(sub)
+
+        props_dict = pr.to_dict()
+        aligned_slice, props_dict = align.align_object(sub, props_dict)
+        if np.sum(aligned_slice) == 0:
+            continue
+
+        try:
+            (coeffs, _), _ = shparam.get_shcoeffs(aligned_slice, lmax=lmax, alignment_2d=False)
+        except Exception as e:
+            logger.error(f"SH computation failed for label {label_id}: {e}")
+            continue
+
+        coeffs.update({'label': label_id})
+        final_dict = props_dict | coeffs
+        results.append(final_dict)
+
+    if not results:
+        return pd.DataFrame()
+
+    out_df = pd.DataFrame(results)
+    cz, cy, cx = group_key
+    out_df["cz"] = int(cz)
+    out_df["cy"] = int(cy)
+    out_df["cx"] = int(cx)
+    return out_df
 
 # --- Environment Logging  ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -237,136 +341,6 @@ def load_n5_zarr_array(path, n5_subpath=None, chunks=None):
     else:
         raise ValueError(f"Unsupported array format (expected .n5 or .zarr): {path}")
 
-def process_object(obj, mask_da, image_da, optimal_lmax=4):
-    """
-    Enhanced process_object that includes spherical harmonics computation
-    Args:
-        obj: pandas.Series
-            A row from the DataFrame containing the object bounding box coordinates
-        mask_da: dask.array.Array
-            The segmentation mask array (ZYX)
-        image_da: dask.array.Array
-            The input image array (ZYXC)
-        optimal_lmax: int
-            The optimized lmax value for spherical harmonics computation
-    Returns:
-        final_dict: dict
-            A dictionary containing the object properties and spherical harmonics coefficients
-    """
-    import sys, os
-    import warnings
-    sys.path.append(os.path.dirname(__file__))   # path where feature_extraction.py lives
-    from aicsshparam import shparam
-    import align_3d as align
-    
-    # Suppress aicsshparam warnings that occur for every object
-    warnings.filterwarnings("ignore", message="Mesh centroid seems to fall outside the object.*", module="aicsshparam")
-
-    obj_id = int(obj.name)
-    slice_z = obj[0]
-    slice_y = obj[1] 
-    slice_x = obj[2]
-
-    # Compute centroid of object (in global coordinates)
-    centroid_z = slice_z.start + (slice_z.stop - slice_z.start) // 2
-    centroid_y = slice_y.start + (slice_y.stop - slice_y.start) // 2
-    centroid_x = slice_x.start + (slice_x.stop - slice_x.start) // 2
-
-    try:
-        # Get only the pixels belonging to the object of interest
-        label_slice = np.where(mask_da == obj_id, mask_da, 0)
-        # Basic regionprops
-        props = regionprops_table(label_slice, image_da, properties=["label", 
-                                                                     "area", 
-                                                                     "mean_intensity"])
-        area = props['area'][0]
-        if area < 4000:  # Increase threshold and fix indexing
-            logger.info(f"Object {obj_id} too small (area={area}). Skipping...")
-            return None
-        else:
-            logger.info(f"Object {obj_id} is large enough (area={area}). Processing...")
-
-        # Add global centroid coordinates
-        props['centroid_z'] = centroid_z
-        props['centroid_y'] = centroid_y
-        props['centroid_x'] = centroid_x
-        # Align object
-        aligned_slice, props = align.align_object(label_slice, props) # align object also adds features to df_props
-        
-        # Check if aligned object has any foreground voxels
-        if np.sum(aligned_slice) == 0:
-            logger.info(f"Object {obj_id} has no foreground voxels after alignment. Skipping spherical harmonics...")
-            return None
-            
-        # Spherical harmonics computation
-        (coeffs, _), _ = shparam.get_shcoeffs(
-            aligned_slice, 
-            lmax=optimal_lmax,
-            alignment_2d=False)
-        
-        # instantiate cellpose model #
-        cp_model = CellposeModel(model_type='cyto3', gpu=True)
-        
-        # cellpose embedding generation #
-        sni = np.max(image_da[:, :, :, 2], axis=0)
-        masks, flows, embedding = cp_model.eval(sni, diameter=None, do_3D=False, compute_masks=False)
-        embedding_dict = {f'e{i}': val for i, val in enumerate(embedding)}
-
-        # remove garbage to avoid memory leaks #
-        del masks
-        del flows
-        del cp_model
-        gc.collect()
-        
-        coeffs.update({'label': obj_id})
-        final_dict = props | coeffs | embedding_dict
-        logger.info(f"Processed object {obj_id}")
-        return final_dict
-    
-    except Exception as e:
-        logger.error(f"Error processing object {obj_id}: {e}", exc_info=True)
-        return None
-
-
-def parallel_processing(client, objects_df, mask_da, image_da, optimal_lmax):
-    """
-    Processes objects in parallel using dask.delayed to build a precise task graph.
-    """
-    
-    # 1. Create a list of Dask Delayed objects
-    #    Each object represents one full "process_object" task with its dependencies.
-    #    This loop runs on the client but is very fast as it only builds a graph.
-    logger.info("Building the Dask task graph...")
-    tasks = []
-    for obj in objects_df.itertuples():
-        slice_z = obj[1]
-        slice_y = obj[2]
-        slice_x = obj[3]
-
-        # Get the Dask array slices (these are still just graph nodes)
-        mask_slice = mask_da[slice_z, slice_y, slice_x]
-        image_slice = image_da[slice_z, slice_y, slice_x]
-
-        # Wrap the function call in dask.delayed.
-        # Dask now understands that mask_slice and image_slice must be computed
-        # *before* process_object is called with their results.
-        task = delayed(process_object)(obj, mask_slice, image_slice, optimal_lmax)
-        tasks.append(task)
-
-    # 2. Submit the entire graph of tasks to the cluster at once.
-    #    client.compute is non-blocking and returns futures immediately.
-    logger.info(f"Submitting {len(tasks)} tasks to the cluster...")
-    futures = client.compute(tasks)
-
-    # 3. Gather results as they complete (this part is great, no changes needed).
-    #    Add a progress bar for better user experience.
-    logger.info("Gathering results as they complete...")
-
-    
-    results = client.gather(futures) # Gather all results after they are complete.
-    
-    # Filter out None results from skipped or failed objects
-    return [r for r in results if r is not None]
 
 def parse_list_string(list_str, dtype=int):
     """Parses comma-separated string into a list of specified type.
@@ -396,7 +370,7 @@ def main():
     parser.add_argument("--input_mask", required=True, help="Path to the input mask Zarr store or TIF file (label image data)")
     parser.add_argument("--output_csv", required=True, help="Path to the output CSV file for features")
     parser.add_argument("--channels", required=True, help="Comma-separated list of channel indices to process (e.g., '0,1,2')")
-
+    parser.add_argument("--generate_embeddings", required=True, help="Whether to generate embeddings (True/False)")
     # Dask SGE Cluster Arguments
     parser.add_argument("--num_workers", type=int, default=16, help="Number of Dask workers (SGE jobs)")
     parser.add_argument("--cores_per_worker", type=int, default=1, help="Number of cores per worker")
@@ -409,6 +383,7 @@ def main():
     parser.add_argument("--log_dir", default=None, help="Directory for Dask worker logs (defaults to ./dask_worker_logs_TIMESTAMP)")
     parser.add_argument("--conda_env", default="otls-pipeline-cp3", help="Conda environment to activate on workers")
 
+
     # --- Argument Parsing ---
     # Check if running under Snakemake
     if 'snakemake' in globals():
@@ -420,7 +395,7 @@ def main():
             output_csv=snakemake.output.csv,
             n5_path_pattern=snakemake.params.get("n5_path_pattern", "ch{}/s0"),
             channels=",".join(map(str, snakemake.params.channels)), # Get channels list from params
-            batch_size=snakemake.params.batch_size,
+            generate_embeddings=snakemake.params.get("generate_embeddings", False), # Default to False if not set
             num_workers=snakemake.resources.num_workers,
             cores_per_worker=snakemake.resources.cores_per_worker,
             mem_per_worker=snakemake.resources.mem_per_worker,
@@ -476,65 +451,72 @@ def main():
     # --- Main Processing Block ---
     try:
         logger.info("--- Starting Distributed Property Computation ---")
-        logger.info(f"Input Zarr: {args.input_zarr}")
+        logger.info(f"Input Zarr (images root): {args.input_zarr}")
         logger.info(f"Input Mask: {args.input_mask}")
-        logger.info(f"Output CSV: {args.output_csv}")
+        logger.info(f"Output: {args.output_csv}")
         logger.info(f"Channels: {channels_to_process}")
 
-
-        image_array_list = []
-        for ch_idx in channels_to_process:
-            n5_channel_path = 'ch{}/s0'.format(ch_idx)
-            logger.info(f"Loading channel {ch_idx} from N5 path: {args.input_zarr}/{n5_channel_path}")
-            try:
-                    dask_arr = da.from_zarr(args.input_zarr + "/" + n5_channel_path)
-                    logger.info(f"  Channel {ch_idx} loaded: Shape={dask_arr.shape}, Chunks={dask_arr.chunksize}, Dtype={dask_arr.dtype}")
-                    image_array_list.append(dask_arr)
-            except Exception as e:
-                    logger.error(f"Failed to load channel {ch_idx} at path {n5_channel_path}: {e}", exc_info=True)
-                    raise # Re-raise error to stop processing if a channel fails
-                    
-        if not image_array_list:
-            raise ValueError("No image channels were successfully loaded.")
-
-        # --- Load Mask and Image Arrays ---
-
-        image_array = da.stack(image_array_list, axis=3)
+        # --- Load Mask as Dask only to access chunks and parallelize bbox pass ---
         mask_array = load_n5_zarr_array(args.input_mask)
+        logger.info(f"Loaded Mask (ZYX assumed): Shape={mask_array.shape}, Chunks={mask_array.chunks}, Dtype={mask_array.dtype}")
 
-        logger.info(f"Loaded Mask (ZYX assumed): Shape={mask_array.shape}, Dtype={mask_array.dtype}")
+        # --- First Pass: Numeric BBoxes per chunk, merged globally ---
+        df_bboxes = compute_bboxes_numeric(mask_array, client)
+        # Save bboxes for debugging/inspection
+        bboxes_csv = args.output_csv.replace(".csv", "_bboxes.csv")
+        df_bboxes.to_csv(bboxes_csv, index=False)
+        logger.info(f"Wrote bounding boxes to {bboxes_csv} (rows={len(df_bboxes)})")
 
-        chunk_shape = tuple(c[0] for c in mask_array.chunks)  
-        #    (this grabs the first size of each chunk-axis; e.g. (100,100))
-        meta_block = sparse.COO.from_numpy(
-            np.zeros(chunk_shape, dtype=mask_array.dtype)
-        )
+        # --- Add storage chunk indices and group ---
+        df_bboxes = add_chunk_indices(df_bboxes, mask_array.chunks)
 
-        mask_sparse = mask_array.map_blocks(to_sparse, 
-                                        dtype=mask_array.dtype,
-                                        meta=meta_block,
-                                        chunks=mask_array.chunks
-                                        )
+        # Drop extremely tiny ROIs early by bbox volume heuristic to cut work
+        voxel_est = (df_bboxes["z1"] - df_bboxes["z0"]) * (df_bboxes["y1"] - df_bboxes["y0"]) * (df_bboxes["x1"] - df_bboxes["x0"])
+        df_bboxes = df_bboxes.loc[voxel_est >= 1, :]
 
+        # Group by chunk indices
+        grouped = df_bboxes.groupby(["cz", "cy", "cx"], sort=False)
+        group_items = list(grouped)
+        logger.info(f"Discovered {len(group_items)} chunk-groups with labels")
 
-        # --- First Pass: Get Object Bounding Boxes ---
-        df_bboxes = find_objects(mask_sparse).compute()
-        df_bboxes = pd.DataFrame(df_bboxes)
-        df_bboxes.to_csv(args.output_csv.replace(".csv", "_bboxes.csv"), index=False)
-        # df_bboxes = df_bboxes.sample(n=100)
+        # --- Output setup ---
 
-        # --- Second Pass: Extract Features ---
-        data_frames = parallel_processing(
-            client,
-            df_bboxes, 
-            mask_array, 
-            image_array, 
-            optimal_lmax=DEFAULT_LMAX
-        )
-        df_properties = pd.DataFrame(data_frames)
-        df_properties = df_properties.map(lambda x: x.item() if hasattr(x, "item") else x)
-        df_properties.to_csv(args.output_csv, index=False)
-        logger.info(f"Finished processing all objects and csv saved.")
+        os.makedirs(os.path.dirname(args.output_csv), exist_ok=True)
+
+        # --- Second Pass: Process groups in parallel ---
+        futures = []
+        for (cz, cy, cx), gdf in group_items:
+            fut = client.submit(
+                _process_group,
+                gdf,
+                args.input_mask,
+                args.input_zarr,
+                channels_to_process,
+                DEFAULT_LMAX,
+                4000,
+                (int(cz), int(cy), int(cx))
+            )
+            futures.append(fut)
+
+        header_written = False
+        write_count = 0
+        for fut, res in as_completed(futures, with_results=True):
+            try:
+                if res is None or (isinstance(res, pd.DataFrame) and res.empty):
+                    fut.release()
+                    continue
+
+                else:
+                    if not header_written:
+                        res.to_csv(args.output_csv, index=False, mode='w')
+                        header_written = True
+                    else:
+                        res.to_csv(args.output_csv, index=False, mode='a', header=False)
+                write_count += 1
+            finally:
+                fut.release()
+
+        logger.info(f"Finished processing all groups and wrote {write_count} output parts.")
     except Exception as e:
         logger.error(f"Error in main processing block: {e}", exc_info=True)
         sys.exit(1)
