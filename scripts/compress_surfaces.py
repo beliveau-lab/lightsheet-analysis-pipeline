@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
 """
-Distributed ParaView visualization using dask.distributed for large zarr files.
-Processes chunks in parallel and combines VTK surfaces.
+Surface Extraction from Segmentation Masks
+
+This script extracts 3D surfaces from segmentation mask data stored in Zarr format.
+It uses Dask for distributed processing and VTK for surface generation.
+Outputs individual .vtp files for each chunk and a combined .pvd collection file.
+
+Usage:
+    python compress_surfaces.py [--zarr_path PATH] [--output_dir PATH] [--downsample N] [--help]
+
+Environment Variables:
+    ZARR_PATH: Path to input zarr file
+    SURFACE_OUT_DIR: Directory for output surface files  
+    LOG_DIR: Directory for log files
+    DOWNSAMPLE: Downsampling factor (default: 2)
 """
 
 import numpy as np
@@ -15,6 +27,8 @@ import vtk
 # import paraview.simple as pv
 import logging
 import os
+import argparse
+import sys
 # import glob
 from utils.dask_utils import setup_dask_sge_cluster, shutdown_dask
 
@@ -52,7 +66,6 @@ def write_pvd_collection(vtp_paths, output_path, timestep=0):
     print(f"Wrote collection file with {len(vtp_paths)} pieces → {output_path}")
     return
 
-# --- Simplified N5/Zarr loading ---
 def load_n5_zarr_array(path, n5_subpath=None, chunks=None):
     logger.info(f"Attempting to load from: {path}" + (f" with N5 subpath: {n5_subpath}" if n5_subpath else ""))
     if path.endswith('.n5'):
@@ -106,9 +119,6 @@ def process_chunk_to_contours(chunk_data, chunk_offset, out_dir, block_id):
         if surface.GetNumberOfPoints() > 0:
             label_array = vtk.vtkIntArray() # add label as scalar
             label_array.SetName("SegmentationLabel")
-            # label_array.SetNumberOfTuples(surface.GetNumberOfPoints())
-            # label_array.Fill(label)
-            # surface.GetPointData().SetScalars(label_array)
             label_array.SetNumberOfTuples(surface.GetNumberOfCells())   # 1 value per polygon (or object)
             label_array.FillComponent(0, label)                         # fill with current label
             surface.GetCellData().SetScalars(label_array)        
@@ -117,13 +127,6 @@ def process_chunk_to_contours(chunk_data, chunk_offset, out_dir, block_id):
     if len(surfaces) == 0:
         return None
 
-    # mb = vtk.vtkMultiBlockDataSet()
-    # for idx, (lbl, surf) in enumerate(surfaces):
-    #     mb.SetBlock(idx, surf)
-    #     meta = mb.GetMetaData(idx)
-    #     meta.Set(vtk.vtkCompositeDataSet.NAME(), f"label_{lbl}")
-
-    # file_name = f"block_{'_'.join(map(str, block_id))}.vtm"
     append = vtk.vtkAppendPolyData()
     for _, surf in surfaces:
         append.AddInputData(surf)
@@ -142,7 +145,7 @@ def process_chunk_to_contours(chunk_data, chunk_offset, out_dir, block_id):
 
     return [{"path": file_path, "labels": [int(l) for l, _ in surfaces]}]
 
-def distributed_surface_extraction(zarr_path, client, out_dir, downsample=0):
+def extract_surfaces(zarr_path, client, out_dir, downsample):
     """Extract surfaces from zarr in parallel chunks. Submitted to dask workers"""
     logger.info(f"Loading zarr: {zarr_path}")
     arr = load_n5_zarr_array(zarr_path)
@@ -164,7 +167,7 @@ def distributed_surface_extraction(zarr_path, client, out_dir, downsample=0):
         chunk_offset = tuple(sum(arr.chunks[i][:block_id[i]]) for i in range(arr.ndim))
         chunk = arr[chunk_slices]
         
-        # Create delayed task – each worker writes its own .vtp files and returns lightweight metadata only.
+        # Create delayed task – process data in-memory
         task = delayed(process_chunk_to_contours)(chunk, chunk_offset, out_dir, block_id)
         delayed_tasks.append(task)
     
@@ -176,8 +179,14 @@ def distributed_surface_extraction(zarr_path, client, out_dir, downsample=0):
         if chunk_meta:
             metadata_list.extend(chunk_meta)
 
+    # Directly handle metadata for .pvd file creation
+    vtp_files = [m['path'] for m in metadata_list]
+    collection_path = os.path.join(out_dir, "combined_surface.pvd")
+    write_pvd_collection(vtp_files, collection_path)
+    
     logger.info(f"Generated {len(metadata_list)} surface files")
     return metadata_list
+
 
 def _setup_dask(params):
     """Setup Dask SGE cluster for distributed processing."""
@@ -211,48 +220,118 @@ def _shutdown_dask(cluster, client):
         except Exception as e:
             logger.error(f"Error shutting down cluster: {e}")
             
-def main():
-    params = {
-    # -- dask parameters --
-    "num_workers": 1,
-    "cpu_memory": "256G", 
-    "cpu_cores": 16,
-    "cpu_processes": 32, # 2 proc per core
-    "cpu_resource_spec": "mfree=16G",  # RAM/worker = RAM/core * cores/worker (16G/core * 1 core/2 proc = 8G/proc)
-    # -- tracking parameters --
-    'use_dask': True,
-    "log_dir" : '/net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/logs/visualization/',
-    "save_dir": '/net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/figures/',
-    "dashboard_port": ":41263",
-    # -- task specific parameters --
-    "zarr_path": '/net/beliveau/vol2/instrument/E9.5_317/Zoom_317/dataset_fused_masks.zarr',
-    # "zarr_path": '/net/beliveau/vol2/instrument/E9.5_290/Zoom_290_subset_test/dataset_fused_masks_cpsamr5.zarr',
-    "downsample": 0,
-    "surface_out_dir": '/net/beliveau/vol2/instrument/E9.5_317/Zoom_317/surfaces_compressed_2',
-    # "surface_out_dir": '/net/beliveau/vol2/instrument/E9.5_290/Zoom_290_subset_test/surfaces_compressed_2',
-    }
-        
-    cluster, client = _setup_dask(params)
-    try:
-        flag = 1
-        if flag:
-            logger.info(f"Dask dashboard: {client.dashboard_link}")
-            # Distributed surface extraction – each worker writes compressed .vtp
-            # files; only metadata is returned.
-            metadata = distributed_surface_extraction(
-                params.get('zarr_path'),
-                client,
-                params.get('surface_out_dir'),
-                downsample=params.get('downsample', 0)
-            )
-            vtp_files = [m['path'] for m in metadata]
-            # collect all vtp files into one pvd
-            collection_path = os.path.join(params["surface_out_dir"], "combined_surface.pvd")
-            write_pvd_collection(vtp_files, collection_path)
-            logger.info(
-                f"Extraction complete. {len(metadata)} surface files written to {params.get('surface_out_dir')}"
-            )
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description='Extract 3D surfaces from segmentation masks',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    parser.add_argument('--zarr_path', type=str,
+                       default=os.environ.get('ZARR_PATH', 
+                               '/net/beliveau/vol2/instrument/E9.5_306/Zoom_306/dataset_fused_masks.zarr'),
+                       help='Path to input zarr file')
+    
+    parser.add_argument('--output_dir', type=str,
+                       default=os.environ.get('SURFACE_OUT_DIR',
+                               '/net/beliveau/vol2/instrument/E9.5_306/Zoom_306/surfaces_compressed'),
+                       help='Output directory for surface files')
+    
+    parser.add_argument('--log_dir', type=str,
+                       default=os.environ.get('LOG_DIR',
+                               '/net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/logs/visualization/mask_306'),
+                       help='Directory for log files')
+    
+    parser.add_argument('--downsample', type=int,
+                       default=int(os.environ.get('DOWNSAMPLE', '2')),
+                       help='Downsampling factor')
+    
+    parser.add_argument('--num_workers', type=int, default=1,
+                       help='Number of Dask workers')
+    
+    parser.add_argument('--cpu_memory', type=str, default='256G',
+                       help='Memory per worker')
+    
+    parser.add_argument('--cpu_cores', type=int, default=16,
+                       help='CPU cores per worker')
+    
+    parser.add_argument('--cpu_processes', type=int, default=32,
+                       help='CPU processes per worker')
+    
+    return parser.parse_args()
 
+def main():
+    args = parse_args()
+    
+    # Validate input paths
+    if not os.path.exists(args.zarr_path):
+        logger.error(f"Input zarr file not found: {args.zarr_path}")
+        sys.exit(1)
+    
+    # Create output directories
+    try:
+        os.makedirs(args.output_dir, exist_ok=True)
+        os.makedirs(args.log_dir, exist_ok=True)
+        logger.info(f"Output directory: {args.output_dir}")
+        logger.info(f"Log directory: {args.log_dir}")
+    except Exception as e:
+        logger.error(f"Failed to create directories: {e}")
+        sys.exit(1)
+    
+    params = {
+        # -- dask parameters --
+        "num_workers": args.num_workers,
+        "cpu_memory": args.cpu_memory, 
+        "cpu_cores": args.cpu_cores,
+        "cpu_processes": args.cpu_processes,
+        "cpu_resource_spec": "mfree=16G",  # RAM/worker = RAM/core * cores/worker
+        # -- tracking parameters --
+        'use_dask': True,
+        "log_dir": args.log_dir,
+        "save_dir": '/net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/figures/',
+        "dashboard_port": ":41263",
+        # -- task specific parameters --
+        "zarr_path": args.zarr_path,
+        "downsample": args.downsample,
+        "surface_out_dir": args.output_dir,
+    }
+    
+    logger.info(f"Starting surface extraction with parameters:")
+    logger.info(f"  Zarr path: {params['zarr_path']}")
+    logger.info(f"  Output directory: {params['surface_out_dir']}")
+    logger.info(f"  Downsample factor: {params['downsample']}")
+    logger.info(f"  Workers: {params['num_workers']}, Cores: {params['cpu_cores']}, Memory: {params['cpu_memory']}")
+    
+    cluster, client = _setup_dask(params)
+    if not cluster or not client:
+        logger.error("Failed to setup Dask cluster")
+        sys.exit(1)
+        
+    try:
+        logger.info(f"Dask dashboard: {client.dashboard_link}")
+        metadata = extract_surfaces(
+            params.get('zarr_path'),
+            client,
+            params.get('surface_out_dir'),
+            downsample=params.get('downsample', 0)
+        )
+        
+        if not metadata:
+            logger.warning("No surfaces were extracted")
+            return
+            
+        vtp_files = [m['path'] for m in metadata]
+        # collect all vtp files into one pvd
+        collection_path = os.path.join(params["surface_out_dir"], "combined_surface_2.pvd")
+        write_pvd_collection(vtp_files, collection_path)
+        logger.info(
+            f"Extraction complete. {len(metadata)} surface files written to {params.get('surface_out_dir')}"
+        )
+        logger.info(f"Collection file written: {collection_path}")
+        
+    except Exception as e:
+        logger.error(f"Error during surface extraction: {e}")
+        raise
     finally:
         _shutdown_dask(cluster, client)
 

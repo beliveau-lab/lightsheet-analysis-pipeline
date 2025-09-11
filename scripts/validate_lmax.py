@@ -4,17 +4,14 @@ import time
 # -- third-party --
 import numpy as np
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
 import sparse
 from aicsshparam import shtools, shparam
 from dask import compute, delayed
 from vtk.util import numpy_support as vtknp
 import scipy.spatial as spatial
-from matplotlib.ticker import FormatStrFormatter
 
 # -- local --
-import align_3d as align
 import feature_extraction as fe
 from utils.dask_utils import setup_dask_sge_cluster, shutdown_dask
 
@@ -306,13 +303,13 @@ class ValidateLMAX:
 
 
 def main():
-    mask_path = '/net/beliveau/vol2/instrument/E9.5_290/Zoom_290_subset_test/dataset_fused_masks_cpsamr5.zarr'
+    mask_path = '/net/beliveau/vol2/instrument/E9.5_306/Zoom_306/dataset_fused_masks.zarr'
     params = {
     # -- dask parameters --
-    "num_workers": 2,
-    "cpu_memory": "256G", 
-    "cpu_cores": 8,
-    "cpu_processes": 16, # 2 proc per core
+    "num_workers": 1,
+    "cpu_memory": "512G", 
+    "cpu_cores": 16,
+    "cpu_processes": 32, # 2 proc per core
     "cpu_resource_spec": "mfree=16G",  # RAM/worker = RAM/core * cores/worker (16G/core * 1 core/2 proc = 8G/proc)
     # -- computation parameters --
     "sampling_rate": 2.752,
@@ -324,7 +321,7 @@ def main():
     # -- tracking parameters --
     'use_dask': True,
     "log_dir" : '/net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/logs/choose_lmax/',
-    "save_dir": '/net/beliveau/vol1/home/msforman/msf_project/lightsheet-analysis-pipeline/figures/',
+    "save_dir": '/net/beliveau/vol2/instrument/E9.5_306/Zoom_306/figures/',
     "dashboard_port": ":41263"
     }
     ValidateLMAX(params).run_analysis(mask_path, plot_results=True)
