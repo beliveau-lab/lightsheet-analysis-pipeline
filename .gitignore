@@ -23,3 +23,5 @@ scripts/visualization.py
 config.yaml
 run_pipeline.sh
 submit_snakemake.sh
+*.png
+figures/
