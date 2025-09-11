@@ -26,7 +26,7 @@ def get_xyz_coords(label_slice) -> np.ndarray:
     indices = np.nonzero(label_slice)
     if len(indices[0]) == 0:
         return np.empty((0, 3))
-    coords = np.column_stack(indices).astype(np.float64)
+    coords = np.column_stack(indices).astype(np.float32)
     return coords[:, [2,1,0]]
 
 def update_properties(V: np.ndarray, X: np.ndarray, df_props: dict) -> dict:
