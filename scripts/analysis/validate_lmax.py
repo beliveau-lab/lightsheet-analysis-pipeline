@@ -179,8 +179,6 @@ class ValidateLMAX:
         
         # Add spatial chunk indices 
         df_bboxes = add_chunk_indices(df_bboxes, mask_array.chunks)
-        
-        # Optional: Filter tiny objects early
         if self.params.get('min_size', 0) > 0:
             voxel_est = ((df_bboxes["z1"] - df_bboxes["z0"]) * 
                         (df_bboxes["y1"] - df_bboxes["y0"]) * 
@@ -314,9 +312,9 @@ def main():
     # -- dask parameters --
     "num_workers": 1,
     "cpu_memory": "512G", 
-    "cpu_cores": 64,
-    "cpu_processes": 64, # 2 proc per core
-    "cpu_resource_spec": "mfree=16G",  # RAM/worker = RAM/core * cores/worker (16G/core * 1 core/2 proc = 8G/proc)
+    "cpu_cores": 16,
+    "cpu_processes": 16, # 2 proc per core
+    "cpu_resource_spec": "mfree=8G",  # RAM/worker = RAM/core * cores/worker (16G/core * 1 core/2 proc = 8G/proc)
     # -- computation parameters --
     "sampling_rate": 2.752,
     "min_size": 4000,

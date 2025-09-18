@@ -132,8 +132,7 @@ def disambiguate_sign_standard(X, reference_axes):
     pca.fit(X)
     E = pca.components_.T
     # Disambiguate axes direction by ensuring all principal axes are in the positive octant
-    # Sign disambiguation: compare EACH COLUMN to its reference
-    # at this point, X is in xyz format
+    # Sign disambiguation: compare each eigenvector to its reference
     for i in range(3):
         if np.dot(E[:, i], reference_axes[i]) < 0:
             E[:, i] *= -1.0
@@ -166,7 +165,7 @@ def align_object_skew(label_slice: np.ndarray, df_props: dict) -> np.ndarray:
     aligned = perform_rotation(label_slice, R_zyx)
     return aligned, df_props
 
-def align_object_reference(label_slice, df_props):
+def align_object_standard(label_slice, df_props):
     coords = get_xyz_coords(label_slice)
     if coords.shape[0] < 10:
         return label_slice, df_props
