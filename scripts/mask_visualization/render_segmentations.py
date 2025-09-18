@@ -166,7 +166,7 @@ def setup_view(rank):
 
 def apply_color_mapping(display, min_label, max_label, rank, colors)-> None:
     if rank == 0:
-        logger.info("Applying Glasbey-on-dark color mapping with hash-based randomization...")
+        logger.info("Applying colormap...")
         sys.stdout.flush()
         
     pv.ColorBy(display, ('POINTS', 'SegmentationLabel'))
