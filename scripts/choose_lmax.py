@@ -157,57 +157,7 @@ class ValidateLMAX:
             results.extend(compute(*batch, sync=True))
         logger.info(f"Found {len(results)} objects")
         return [r for r in results if r is not None]
-
-    def plot_reconstruction_error(self, object_errors, reference_lmax=None):        
-        # --- Data Prep ---
-        plot_data = []
-        for obj in object_errors:
-            obj_id = obj['id']
-            for lmax, error in obj['distances'].items():
-                plot_data.append({
-                    'object_id': obj_id,
-                    'lmax': lmax,
-                    'error': error
-                })
-        
-        df_plot = pd.DataFrame(plot_data)
-        df_plot.to_csv(f'{self.params["save_dir"]}/object_reconstruction_errors.csv', index=False)
-        logger.info(f"Saved object reconstruction errors to {self.params['save_dir']}/object_reconstruction_errors.csv")
-
-        fig, ax = plt.subplots(1, 1, figsize=(4, 3))
-        
-        # --- Individual Object Curves in Gray ---
-        for obj_id in df_plot['object_id'].unique():
-            obj_data = df_plot[df_plot['object_id'] == obj_id].sort_values('lmax')
-            x_values = (obj_data['lmax'] + 1) ** 2
-            ax.plot(x_values, 
-                    obj_data['error'], 
-                    '-', 
-                    color='gray', 
-                    linewidth=0.2, 
-                    alpha=0.5)
-        
-        # --- Aggregated Statistics ---
-        df_agg = (df_plot.groupby('lmax')['error']
-                  .agg(['mean', 'std'])
-                  .reset_index()
-                  .sort_values('lmax'))
-        x_agg = (df_agg['lmax'] + 1) ** 2
-
-        # Mean line
-        ax.plot(x_agg, 
-                df_agg['mean'], 
-                '-', 
-                color='k', 
-                linewidth=2, 
-                label='Mean')
-        
-        # Standard deviation band
-        ax.fill_between(x_agg, 
-                       df_agg['mean'] - df_agg['std'],
-                       df_agg['mean'] + df_agg['std'],
-                       alpha=0.3, color='black', label='±1 STD')
-        
+      
         # --- Axis Formatting ---
         ax.set_yscale('log')
         # ax.set_ylim(0.1, 10.0)

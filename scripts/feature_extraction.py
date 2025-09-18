@@ -267,7 +267,7 @@ def _process_group(group_df: pd.DataFrame,
             continue
 
         try:
-            (coeffs, _), _ = shparam.get_shcoeffs(aligned_slice, lmax=lmax, alignment_2d=True)
+            (coeffs, _), _ = shparam.get_shcoeffs(aligned_slice, lmax=lmax, alignment_2d=False)
         except Exception as e:
             logger.error(f"SH computation failed for label {label_id}: {e}")
             continue
