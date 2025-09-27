@@ -262,7 +262,7 @@ def _process_group(group_df: pd.DataFrame,
         sub = np.ascontiguousarray(sub)
 
         props_dict = pr.to_dict()
-        aligned_slice, props_dict = align.align_object(sub, props_dict)
+        aligned_slice, props_dict = align.align_object_standard(sub, props_dict)
         if np.sum(aligned_slice) == 0:
             continue
 
