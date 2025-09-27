@@ -863,9 +863,9 @@ def get_foreground_mask(input_n5, n5_subpath):
     mask = np.zeros(shape, dtype=bool)
     # Set the mask to True where the input Zarr array is above otsu threshold
 
-    thresh = threshold_otsu(arr_zarr)
+    thresh = threshold_otsu(arr_zarr) * 0.8
     mask[arr_zarr > thresh] = True
-    logger.info(f"Foreground mask created with shape {mask.shape}")
+    logger.info(f"Foreground mask created with shape {mask.shape}. Otsu threshold is {thresh}")
     return mask
 
 
@@ -919,7 +919,8 @@ def main():
             resource_spec=snakemake.resources.gpu_resource_spec,
             log_dir=snakemake.params.log_dir, # Reuse dask log dir
             conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "otls-pipeline",
-            dashboard_port=snakemake.resources.dashboard_port
+            dashboard_port=snakemake.resources.dashboard_port,
+            multiresolution=snakemake.params.get("multiresolution", False),
         )
     else:
         logger.info("Parsing command-line arguments.")
@@ -983,6 +984,17 @@ def main():
             temporary_directory=args.temporary_dir,  
             # Pass model_kwargs if needed: model_kwargs={}
         )
+
+        # if eval(str(args.multiresolution)):
+        #     n_levels = 4
+        #     downsample = 2
+        #     logger.info("Generating multiresolution pyramid...")
+        #     for level in range(1, n_levels + 1):
+        #         scale = downsample ** level
+        #         logger.info(f"Generating level {level} with scale factor {scale}")
+        #         # Call a function to generate the pyramid level, e.g., generate_pyramid_level
+        #         # generate_pyramid_level(args.output_zarr, client, level, scale)
+        #     logger.info("Multiresolution pyramid generation complete.")
 
         logger.info("Segmentation complete.")
 

@@ -62,7 +62,7 @@ def load_n5_zarr_array(path, n5_subpath=None, chunks=None):
 # --- GPU-ACCELERATED STRIPE FIX FUNCTION (Copied from the main script) ---
 def stripe_fix_gpu(
     img,
-    clip_lowhi=(95, 99.99),
+    clip_lowhi=(95, 99),
     min_mask_ratio=0.005,
     tissue_blur_kernel=None,
     vertical_blur_sigma=None,
@@ -80,14 +80,16 @@ def stripe_fix_gpu(
     # Step 1: Create tissue mask using GPU operations
     low_clip = cp.percentile(img, clip_lowhi[0]) / 5
     high_clip = cp.percentile(img, clip_lowhi[1])
-    img = cp.clip(img, low_clip, high_clip) - low_clip
+    img_clip = cp.clip(img, low_clip, high_clip) - low_clip
     
-    blurred_img = cupy_uniform_filter(img, tissue_blur_kernel)
+    blurred_img = cupy_uniform_filter(img_clip, tissue_blur_kernel)
+    blurred_img[blurred_img < 0] = 0
+
     threshold_value = cucim_filters.threshold_otsu(blurred_img)
     mask = blurred_img > threshold_value
 
     # Step 2: Stripe profile estimation
-    masked_blurimg = cucim_gaussian(img, sigma=vertical_blur_sigma, preserve_range=True) * mask
+    masked_blurimg = cucim_gaussian(img_clip, sigma=vertical_blur_sigma, preserve_range=True) * mask
     masked_blurimg_lineprof = cp.sum(masked_blurimg, axis=0)
     min_mask_pixels = img.shape[0] * min_mask_ratio
     mask_lineprof = cp.sum(mask, axis=0)
@@ -101,8 +103,8 @@ def stripe_fix_gpu(
     stripe[stripe == 0] = 1
     stripe_profile = cucim_gaussian(stripe, sigma=stripe_smooth_sigma, preserve_range=True)
 
-    # Step 3: Stripe correction
-    corrected = img / stripe_profile
+    img_nobg = np.clip(img, low_clip, img.max()) - low_clip  ## modified
+    corrected = img_nobg / stripe_profile
 
     del img, blurred_img, threshold_value, mask, masked_blurimg, masked_blurimg_lineprof, mask_lineprof, col_masked_lineprof, norm_line_prof, stripe, stripe_profile
     gc.collect()

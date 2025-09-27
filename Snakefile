@@ -302,7 +302,7 @@ rule destripe:
     script:
         "scripts/destripe.py"
 
-rule attenutation_fix:
+rule attenuation_fix:
     input:
         zarr=DESTRIPE_ZARR
     output:
