@@ -863,7 +863,7 @@ def get_foreground_mask(input_n5, n5_subpath):
     mask = np.zeros(shape, dtype=bool)
     # Set the mask to True where the input Zarr array is above otsu threshold
 
-    thresh = threshold_otsu(arr_zarr) * 0.8
+    thresh = threshold_otsu(arr_zarr) * 0.8 # mult by 0.8 to ensure we get all regions (can prob go lower)
     mask[arr_zarr > thresh] = True
     logger.info(f"Foreground mask created with shape {mask.shape}. Otsu threshold is {thresh}")
     return mask

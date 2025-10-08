@@ -231,7 +231,7 @@ def _process_group(group_df: pd.DataFrame,
         ch_arrays = []
         for ch in channels:
             ch_path = os.path.join(image_zarr_root, f"ch{ch}", "s0")
-            ch_arr = load_n5_zarr_array(image_zarr_root, n5_subpath=f"ch{ch}/s0")
+            ch_arr = load_n5_zarr_array(image_zarr_root, n5_subpath=f"/ch{ch}/s0")
             ch_arrays.append(np.asarray(ch_arr[sz:ez, sy:ey, sx:ex]))
 
         for idx, ch in enumerate(channels):
@@ -335,9 +335,15 @@ def load_n5_zarr_array(path, n5_subpath=None, chunks=None):
         logger.info(f"Loaded N5 array: Shape={arr_handle.shape}, Chunks={arr_handle.chunks}")
         return da.from_zarr(arr_handle, chunks=chunks)
     elif path.endswith('.zarr'):
-        arr_handle = zarr.open(path, mode='r')
-        logger.info(f"Loaded Zarr array: Shape={arr_handle.shape}")
-        return da.from_zarr(path, chunks=chunks)
+        if n5_subpath:
+            arr_handle = zarr.open(path+n5_subpath, mode='r')
+            logger.info(f"Loaded Zarr array: Shape={arr_handle.shape}")
+            return da.from_zarr(path+n5_subpath, chunks=chunks)
+        else:
+            arr_handle = zarr.open(path, mode='r')
+            logger.info(f"Loaded Zarr array: Shape={arr_handle.shape}")
+            return da.from_zarr(path, chunks=chunks)
+        
     else:
         raise ValueError(f"Unsupported array format (expected .n5 or .zarr): {path}")
 
