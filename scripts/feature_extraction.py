@@ -284,6 +284,36 @@ def _process_group(group_df: pd.DataFrame,
     out_df["cz"] = int(cz)
     out_df["cy"] = int(cy)
     out_df["cx"] = int(cx)
+
+    # rename columns to human-readable format #
+    columns_dict = {
+        "label": "Nuclear_ID",
+        "area": "Nuclear_Volume",
+        "mean_intensity_ch0": "Mean_FUCCI_Green_Intensity",
+        "mean_intensity_ch1": "Mean_FUCCI_Red_Intensity",
+        "mean_intensity_ch2": "Integrated_DNA_Intensity",
+        "centroid_z": "Centroid_Z",
+        "centroid_y": "Centroid_Y",
+        "centroid_x": "Centroid_X",
+        "cz": "Chunk_Z",
+        "cy": "Chunk_Y",
+        "cx": "Chunk_X",
+        "major_magnitude": "Major_Axis_Length",
+        "intermediate_magnitude": "Intermediate_Axis_Length",
+        "minor_magnitude": "Minor_Axis_Length",
+        "cos_major": "Major_Axis_Cosine",
+        "cos_intermediate": "Intermediate_Axis_Cosine",
+        "cos_minor": "Minor_Axis_Cosine"
+    }
+    out_df.rename(columns=columns_dict, inplace=True)
+
+    # reorder columns #
+    out_df = out_df[["Nuclear_ID", "Nuclear_Volume",
+                     "Centroid_Z", "Centroid_Y", "Centroid_X",
+                     "Mean_FUCCI_Green_Intensity", "Mean_FUCCI_Red_Intensity", "Integrated_DNA_Intensity",
+                     "Major_Axis_Length", "Intermediate_Axis_Length", "Minor_Axis_Length",
+                     "Major_Axis_Cosine", "Intermediate_Axis_Cosine", "Minor_Axis_Cosine",
+                     "Chunk_Z", "Chunk_Y", "Chunk_X"]]
     return out_df
 
 # --- Environment Logging  ---
@@ -312,21 +342,21 @@ log_environment()
 
 # --- Simplified N5/Zarr loading ---
 def load_n5_zarr_array(path, n5_subpath=None, chunks=None):
-    """Loads N5 or Zarr, handling potential subpath for N5.
+    """Loads N5 or Zarr array, handling subpaths for both formats.
     
     Args:
         path: str
             The path to the N5 or Zarr container
         n5_subpath: str
-            The subpath to the underlying N5 array
+            The subpath to the underlying array (e.g., 'ch0/s0')
+            Works for both N5 and Zarr formats
         chunks: tuple
             The chunks to load the array into (leave as None for no rechunking)
     Returns:
         da.Array
             The dask array
     """
-    
-    logger.info(f"Attempting to load from: {path}" + (f" with N5 subpath: {n5_subpath}" if n5_subpath else ""))
+    logger.info(f"Attempting to load from: {path}" + (f" with subpath: {n5_subpath}" if n5_subpath else ""))
     if path.endswith('.n5'):
         store = zarr.N5Store(path)
         if not n5_subpath:
@@ -335,9 +365,16 @@ def load_n5_zarr_array(path, n5_subpath=None, chunks=None):
         logger.info(f"Loaded N5 array: Shape={arr_handle.shape}, Chunks={arr_handle.chunks}")
         return da.from_zarr(arr_handle, chunks=chunks)
     elif path.endswith('.zarr'):
-        arr_handle = zarr.open(path, mode='r')
-        logger.info(f"Loaded Zarr array: Shape={arr_handle.shape}")
-        return da.from_zarr(path, chunks=chunks)
+        if n5_subpath:
+            # open zarr store and access the specific subpath using dictionary access #
+            store = zarr.open(path, mode='r')
+            arr_handle = store[n5_subpath]
+            logger.info(f"Loaded Zarr array from subpath '{n5_subpath}': Shape={arr_handle.shape}")
+            return da.from_zarr(arr_handle, chunks=chunks)
+        else:
+            arr_handle = zarr.open(path, mode='r')
+            logger.info(f"Loaded Zarr array: Shape={arr_handle.shape}")
+            return da.from_zarr(path, chunks=chunks)
     else:
         raise ValueError(f"Unsupported array format (expected .n5 or .zarr): {path}")
 
