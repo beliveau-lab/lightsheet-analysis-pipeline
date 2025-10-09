@@ -308,12 +308,14 @@ def _process_group(group_df: pd.DataFrame,
     out_df.rename(columns=columns_dict, inplace=True)
 
     # reorder columns #
-    out_df = out_df[["Nuclear_ID", "Nuclear_Volume",
-                     "Centroid_Z", "Centroid_Y", "Centroid_X",
-                     "Mean_FUCCI_Green_Intensity", "Mean_FUCCI_Red_Intensity", "Integrated_DNA_Intensity",
-                     "Major_Axis_Length", "Intermediate_Axis_Length", "Minor_Axis_Length",
-                     "Major_Axis_Cosine", "Intermediate_Axis_Cosine", "Minor_Axis_Cosine",
-                     "Chunk_Z", "Chunk_Y", "Chunk_X"]]
+    columns_no_shcoeffs = ["Nuclear_ID", "Nuclear_Volume",
+                          "Centroid_Z", "Centroid_Y", "Centroid_X",
+                          "Mean_FUCCI_Green_Intensity", "Mean_FUCCI_Red_Intensity", "Integrated_DNA_Intensity",
+                          "Major_Axis_Length", "Intermediate_Axis_Length", "Minor_Axis_Length",
+                          "Major_Axis_Cosine", "Intermediate_Axis_Cosine", "Minor_Axis_Cosine",
+                          "Chunk_Z", "Chunk_Y", "Chunk_X"]
+    columns = columns_no_shcoeffs + [col for col in out_df.columns if col not in columns_no_shcoeffs]
+    out_df = out_df[columns]
     return out_df
 
 # --- Environment Logging  ---
