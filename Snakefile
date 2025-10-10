@@ -23,7 +23,6 @@ PIPELINE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR = PIPELINE_OUTPUT_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR_STR = str(LOG_DIR)
-LOG_DIR_STR = '/net/beliveau/vol1/project/Nico/OTLS/lightsheet-analysis-pipeline/dask_logs'
 
 # Helper to generate consistent XML names
 def get_processed_xml_path(base_name, stage_suffix, reoriented_prefix_if_applicable=""):
