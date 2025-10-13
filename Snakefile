@@ -102,7 +102,7 @@ rule pairwise_stitching:
         xml=ORIENTED_XML_FOR_STITCHING
     output:
         done=PAIRWISE_DONE,
-        stitched_xml=maybe_protected(PAIRWISE_STITCHED_XML)
+        stitched_xml=PAIRWISE_STITCHED_XML
     params:
         outdir=lambda w, output: os.path.dirname(output.done),
         script_dir=config["bigstitcher_script_dir"],

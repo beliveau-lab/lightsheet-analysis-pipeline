@@ -231,7 +231,7 @@ def _process_group(group_df: pd.DataFrame,
         ch_arrays = []
         for ch in channels:
             ch_path = os.path.join(image_zarr_root, f"ch{ch}", "s0")
-            ch_arr = load_n5_zarr_array(image_zarr_root, n5_subpath=f"ch{ch}/s0")
+            ch_arr = load_n5_zarr_array(image_zarr_root, n5_subpath=f"/ch{ch}/s0")
             ch_arrays.append(np.asarray(ch_arr[sz:ez, sy:ey, sx:ex]))
 
         for idx, ch in enumerate(channels):
