@@ -52,6 +52,7 @@ AFFINE_FUSION_N5 = PIPELINE_OUTPUT_DIR / "dataset_fused.n5"
 AFFINE_FUSION_DONE = PIPELINE_OUTPUT_DIR / "affine_fusion.done"
 SEGMENTED_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['segmentation']['output_suffix']}"
 FEATURES_CSV = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['feature_extraction']['output_suffix']}"
+POSTPROCESSED_CSV = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['postprocessing']['output_suffix']}"
 DESTRIPE_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['destripe']['output_suffix']}"
 CORRECTED_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['fix_attenuation']['output_suffix']}"
 RECHUNKED_BLOCKS_ZARR = PIPELINE_OUTPUT_DIR / f"dataset_fused{config['rechunk_to_blocks']['output_suffix']}"
@@ -83,7 +84,7 @@ def get_spark_env_exports(params):
 
 rule all:
     input:
-        csv=FEATURES_CSV
+        csv=POSTPROCESSED_CSV
 
 if config.get("reorient_sample", {}).get("enabled", False):
     rule reorient_sample:
@@ -386,3 +387,20 @@ rule feature_extraction:
         "workflow/envs/otls-pipeline-cp3.yml"
     script:
         "scripts/feature_extraction.py"
+
+rule postprocessing:
+    input:
+        csv=FEATURES_CSV
+    output:
+        csv=maybe_protected(POSTPROCESSED_CSV)
+    params:
+        outdir=lambda w, output: os.path.dirname(output.csv),
+        log_dir=LOG_DIR_STR,
+        enable_somite_analysis=config["postprocessing"]["enable_somite_analysis"],
+        somite_mask_path=config["postprocessing"].get("somite_mask_path", ""),
+        num_somites_left=config["postprocessing"].get("num_somites_left", 0),
+        num_somites_right=config["postprocessing"].get("num_somites_right", 0)
+    conda:
+        "workflow/envs/otls-pipeline.yml"
+    script:
+        "scripts/postprocessing.py"

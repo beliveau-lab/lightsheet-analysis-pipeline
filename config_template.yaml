@@ -99,3 +99,11 @@ feature_extraction:
   channels: [0,1,2]
   n5_path_pattern: "ch{}/s0"
   generate_embeddings: False                  # Whether to generate embeddings
+
+# Postprocessing parameters
+postprocessing:
+  output_suffix: "_features_postprocessed.csv"
+  enable_somite_analysis: False
+  somite_mask_path: ""                        # Path to somite mask (required if enable_somite_analysis is True)
+  num_somites_left: 0                         # Number of somites on left side
+  num_somites_right: 0                        # Number of somites on right side
