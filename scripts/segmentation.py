@@ -901,7 +901,7 @@ def main():
     if 'snakemake' in globals():
         logger.info("Running under Snakemake.")
         args = argparse.Namespace(
-            input_n5=snakemake.input.n5,
+            input_n5=snakemake.input.zarr,
             segmentation_channel=snakemake.params.segmentation_channel,
             output_zarr=snakemake.output.zarr,
             block_size=",".join(map(str, snakemake.params.block_size)),

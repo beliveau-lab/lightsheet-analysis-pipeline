@@ -221,8 +221,7 @@ rule affine_fusion:
 rule segmentation:
     input:
         # scheduler=SCHEDULER_FILE,
-        done=AFFINE_FUSION_DONE,
-        n5=AFFINE_FUSION_N5
+        zarr=RECHUNKED_BLOCKS_ZARR
     output:
         zarr=maybe_protected(directory(SEGMENTED_ZARR))
     params:
