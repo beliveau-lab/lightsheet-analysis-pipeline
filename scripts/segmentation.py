@@ -565,12 +565,12 @@ def distributed_eval(
             else: # Assume Zarr path
                 input_arr_handle = zarr.open(str(input_source), mode='r')
                 input_path_for_workers = str(input_source)
-                input_n5_subpath_for_workers = None
+                input_n5_subpath_for_workers = n5_subpath
         else: # Assume already an open Zarr array
             input_arr_handle = input_source
             # Need to get path info if possible for workers
             input_path_for_workers = input_arr_handle.store.path if hasattr(input_arr_handle.store, 'path') else None
-            input_n5_subpath_for_workers = input_arr_handle.path if input_path_for_workers and input_path_for_workers.endswith(".n5") else None
+            input_n5_subpath_for_workers = input_arr_handle.path if hasattr(input_arr_handle, 'path') else n5_subpath
             if not input_path_for_workers:
                  logger.warning("Input array provided directly, worker path inference might fail if not standard Zarr/N5.")
                  # This path might not work if input_source was created in memory
