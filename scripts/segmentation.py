@@ -211,6 +211,7 @@ def process_block(
             input_arr = zarr.open_array(store=store, path=n5_subpath, mode='r')
         else: # Assume .zarr
             input_arr = zarr.open(input_zarr_path, mode='r')
+            input_arr = input_arr[n5_subpath] if n5_subpath else input_arr
 
         if output_zarr_path:
             output_arr = zarr.open(output_zarr_path, mode='r+') # Open read-write
@@ -575,12 +576,12 @@ def distributed_eval(
                  # This path might not work if input_source was created in memory
                  input_path_for_workers = "memory_array" # Placeholder
 
-        input_shape = input_arr_handle.shape
-        input_dtype = input_arr_handle.dtype
-        logger.info(f"Opened input: Shape={input_shape}, Dtype={input_dtype}, Chunks={input_arr_handle.chunks}")
+        input_shape = input_arr_handle[n5_subpath].shape
+        input_dtype = input_arr_handle[n5_subpath].dtype
+        logger.info(f"Opened input: Shape={input_shape}, Dtype={input_dtype}")#, Chunks={input_arr_handle.chunks}")
         # Ensure blocksize matches dimensionality
-        if len(blocksize) != input_arr_handle.ndim:
-             raise ValueError(f"Blocksize dimensions ({len(blocksize)}) must match input data dimensions ({input_arr_handle.ndim})")
+        if len(blocksize) != input_arr_handle[n5_subpath].ndim:
+             raise ValueError(f"Blocksize dimensions ({len(blocksize)}) must match input data dimensions ({input_arr_handle[n5_subpath].ndim})")
 
     except Exception as e:
         logger.error(f"Failed to open input array {input_source}: {e}", exc_info=True)
@@ -623,7 +624,7 @@ def distributed_eval(
         # Compute global 1% and 99% percentiles using Dask
         # TODO: only calculate percentiles on array within foreground mask
 
-        dask_array = da.from_zarr(input_arr_handle, component=input_n5_subpath_for_workers)
+        dask_array = da.from_zarr(input_arr_handle[n5_subpath])#, component=input_n5_subpath_for_workers)
         global_p1, global_p99 = da.percentile(da.ravel(dask_array), [1,99]).compute()
         global_p1, global_p99 = int(global_p1), int(global_p99)
         logger.info(f"Global 1% percentile: {global_p1}, Global 99% percentile: {global_p99}")
@@ -855,8 +856,9 @@ def get_foreground_mask(input_n5, n5_subpath):
     """Create the foreground mask from the input Zarr array"""
     # Get the shape of the input Zarr array
     logger.info(f"Getting foreground mask for {input_n5} [{n5_subpath}]")
-    store = zarr.N5Store(str(input_n5))
-    input_arr_handle = zarr.open_array(store=store, path=n5_subpath, mode='r')
+    # use zarr.open + dictionary access to open array handle (compatible with both .n5 and .zarr) #
+    store = zarr.open(str(input_n5), mode='r')
+    input_arr_handle = store[n5_subpath]
     arr_zarr = da.from_zarr(input_arr_handle)
     shape = input_arr_handle.shape
     # Create a mask of all zeros with the same shape as the input Zarr array
