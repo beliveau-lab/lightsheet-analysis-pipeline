@@ -923,6 +923,7 @@ def main():
             conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "otls-pipeline",
             dashboard_port=snakemake.resources.dashboard_port,
             multiresolution=snakemake.params.get("multiresolution", False),
+            worker_timeout=snakemake.resources.get("worker_timeout", 600)
         )
     else:
         logger.info("Parsing command-line arguments.")
@@ -956,7 +957,8 @@ def main():
             resource_spec=args.resource_spec,
             log_directory=args.log_dir,
             conda_env=args.conda_env,
-            dashboard_port=args.dashboard_port
+            dashboard_port=args.dashboard_port,
+            worker_timeout=args.worker_timeout
         )
     except Exception as e:
         logger.error(f"Failed to set up Dask cluster: {e}", exc_info=True)

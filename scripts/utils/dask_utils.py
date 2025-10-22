@@ -25,6 +25,7 @@ def setup_dask_sge_cluster(
     conda_env: str | None = "dask-cellpose", # Default env name
     dashboard_port: str | None = ":12345",
     resources: bool | None = False,
+    worker_timeout: int = 600, # Timeout in seconds for waiting for workers to start
     **kwargs # For extra SGECluster or dask config options
 ):
     """
@@ -41,6 +42,7 @@ def setup_dask_sge_cluster(
         resource_spec: SGE resource specification (e.g., 'mfree=60G,gpgpu=1').
         log_directory: Directory for Dask worker logs.
         conda_env: Name of the conda environment to activate in the job script.
+        worker_timeout: Timeout in seconds for waiting for workers to start (default: 600).
         kwargs: Additional keyword arguments passed to SGECluster or dask.config.set.
 
     Returns:
@@ -129,7 +131,7 @@ def setup_dask_sge_cluster(
         logger.info(f"Cluster scale command issued. Waiting for workers (check dashboard).")
 
         # wait for workers to be ready 
-        client.wait_for_workers(1, timeout=600)
+        client.wait_for_workers(1, timeout=worker_timeout)
         logger.info(f"Successfully connected to {len(client.scheduler_info()['workers'])} workers.")
 
         logger.info(f"Dask dashboard available at: {client.dashboard_link}")

@@ -241,7 +241,8 @@ rule segmentation:
         gpu_cores=config["dask"]["gpu_worker_config"]["cores"],
         gpu_queue=config["dask"]["gpu_worker_config"]["queue"],
         gpu_processes=config["dask"]["gpu_worker_config"]["processes"],
-        dashboard_port=config["dask"]["dashboard_port"]
+        dashboard_port=config["dask"]["dashboard_port"],
+        worker_timeout=config["dask"].get("worker_timeout", 600)
     conda:
         "workflow/envs/otls-pipeline.yml"
     script:
@@ -266,7 +267,8 @@ rule rechunk_to_planes:
         cores=config["dask"]["cpu_worker_config"]["cores"],
         queue=config["dask"]["cpu_worker_config"]["queue"],
         processes=config["dask"]["cpu_worker_config"]["processes"],
-        dashboard_port=config["dask"]["dashboard_port"]
+        dashboard_port=config["dask"]["dashboard_port"],
+        worker_timeout=config["dask"].get("worker_timeout", 600)
     conda:
         "workflow/envs/otls-pipeline.yml"
     script:
@@ -295,7 +297,8 @@ rule destripe:
         # Common params
         runtime=config["dask"].get("runtime", "1400000"),
         dashboard_port=config["dask"]["dashboard_port"],
-        dask_resources="GPU=1"
+        dask_resources="GPU=1",
+        worker_timeout=config["dask"].get("worker_timeout", 600)
 
     conda:
         "workflow/envs/otls-pipeline.yml"
@@ -325,6 +328,7 @@ rule attenuation_fix:
         # Common params
         runtime=config["dask"].get("runtime", "1400000"),
         dashboard_port=config["dask"]["dashboard_port"],
+        worker_timeout=config["dask"].get("worker_timeout", 600)
 
     conda:
         "workflow/envs/otls-pipeline.yml"
@@ -353,7 +357,8 @@ rule rechunk_to_blocks:
         cores=config["dask"]["cpu_worker_config"]["cores"],
         resource_spec=config["dask"]["cpu_worker_config"]["resource_spec"],
         processes=config["dask"]["cpu_worker_config"]["processes"],
-        dashboard_port=config["dask"]["dashboard_port"]
+        dashboard_port=config["dask"]["dashboard_port"],
+        worker_timeout=config["dask"].get("worker_timeout", 600)
     conda:
         "workflow/envs/otls-pipeline.yml"
     script:
@@ -381,7 +386,8 @@ rule feature_extraction:
         cores_per_worker=config["dask"]["cpu_worker_config"]["cores"],
         resource_spec=config["dask"]["cpu_worker_config"]["resource_spec"],
         processes=config["dask"]["cpu_worker_config"]["processes"],
-        dashboard_port=config["dask"]["dashboard_port"]
+        dashboard_port=config["dask"]["dashboard_port"],
+        worker_timeout=config["dask"].get("worker_timeout", 600)
     conda:
         "workflow/envs/otls-pipeline-cp3.yml"
     script:

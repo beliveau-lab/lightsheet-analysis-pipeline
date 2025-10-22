@@ -127,6 +127,7 @@ def main():
             conda_env=snakemake.conda_env_name if hasattr(snakemake, 'conda_env_name') else "otls-pipeline-cp3", # Get conda env name if available
             dashboard_port=snakemake.resources.dashboard_port,
             channels=",".join(map(str, snakemake.params.channels)),
+            worker_timeout=snakemake.resources.get("worker_timeout", 600)
         )
     else:
         logger.info("Not running under Snakemake, parsing command-line arguments.")
@@ -153,7 +154,8 @@ def main():
             resource_spec=args.resource_spec,
             log_directory=args.log_dir, # Pass None if not specified
             conda_env=args.conda_env,
-            dashboard_port=args.dashboard_port
+            dashboard_port=args.dashboard_port,
+            worker_timeout=args.worker_timeout
             # job_name='feat_extract' # Consider adding a job name
         )
         logger.info(f"Dask dashboard link: {client.dashboard_link}") # Log dashboard link!

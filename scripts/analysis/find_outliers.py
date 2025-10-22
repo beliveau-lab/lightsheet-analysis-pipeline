@@ -364,6 +364,7 @@ def _setup_dask(params):
             log_directory=params.get("log_dir", None),
             conda_env=params.get("conda_env", "otls-pipeline"),
             dashboard_port=params.get("dashboard_port", None),
+            worker_timeout=params.get("worker_timeout", 600)
         )
         logger.info(f"Dask dashboard link: {client.dashboard_link}")
         return cluster, client

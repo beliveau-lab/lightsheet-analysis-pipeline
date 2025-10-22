@@ -42,6 +42,7 @@ dask:
   runtime: "14000000"                         # Max runtime in seconds
   log_dir: "/path/to/dask_logs"               # Directory to save logs
   dashboard_port: ":12345"                    # Port for Dask dashboard
+  worker_timeout: 3600                        # Timeout in seconds for waiting for workers to start (default: 3600 = 1 hour)
 
   # GPU-specific worker settings
   gpu_worker_config:
