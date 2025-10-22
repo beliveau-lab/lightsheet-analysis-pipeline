@@ -206,7 +206,8 @@ class ValidateLMAX:
                 resource_spec=self.params.get('cpu_resource_spec', 'mfree=60G'),
                 log_directory=self.params.get('log_dir', None),
                 conda_env=self.params.get('conda_env', 'otls-pipeline'),
-                dashboard_port=self.params.get('dashboard_port', None)
+                dashboard_port=self.params.get('dashboard_port', None),
+                worker_timeout=self.params.get('worker_timeout', 600)
             )
             logger.info(f"Dask dashboard link: {self.client.dashboard_link}")
             return True
