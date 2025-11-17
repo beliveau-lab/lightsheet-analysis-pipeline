@@ -18,6 +18,7 @@ dependencies:
   - jedi
   - cupy
   - cucim
+  - cuda-version==12.8
   - pip: 
       - torch
       - torchvision
