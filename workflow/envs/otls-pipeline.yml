@@ -20,7 +20,7 @@ dependencies:
   - cucim==25.08.00
   - cuda-version==12.9
   - pip: 
-      - torch==2.8.0
-      - torchvision==0.23.0
+      - torch==2.8.0+cu128
+      - torchvision==0.23.0+cu128
       - torchaudio==2.8.0+cu128
 
