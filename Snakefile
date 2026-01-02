@@ -305,39 +305,39 @@ rule destripe:
     script:
         "scripts/destripe.py"
 
-rule attenuation_fix:
-    input:
-        zarr=DESTRIPE_ZARR
-    output:
-        zarr=maybe_protected(directory(CORRECTED_ZARR))
-    params:
-        channels=config["fix_attenuation"]["channels"],
-        outdir=lambda w, output: os.path.dirname(output.zarr),
-        log_dir=LOG_DIR_STR,
+# rule attenuation_fix:
+#     input:
+#         zarr=DESTRIPE_ZARR
+#     output:
+#         zarr=maybe_protected(directory(CORRECTED_ZARR))
+#     params:
+#         channels=config["fix_attenuation"]["channels"],
+#         outdir=lambda w, output: os.path.dirname(output.zarr),
+#         log_dir=LOG_DIR_STR,
 
-    resources:
-        # Resources for the Snakemake job submission
-        worker_memory=config["dask"]["cpu_worker_config"]["memory"],
-        resource_spec=config["dask"]["cpu_worker_config"]["resource_spec"],
-        project=config["dask"]["cpu_worker_config"]["project"], # SGE project
-        n_workers=config["dask"]["cpu_worker_config"]["num_workers"],
-        cores=config["dask"]["cpu_worker_config"]["cores"],
-        queue=config["dask"]["cpu_worker_config"]["queue"],
-        processes=config["dask"]["cpu_worker_config"]["processes"],
+#     resources:
+#         # Resources for the Snakemake job submission
+#         worker_memory=config["dask"]["cpu_worker_config"]["memory"],
+#         resource_spec=config["dask"]["cpu_worker_config"]["resource_spec"],
+#         project=config["dask"]["cpu_worker_config"]["project"], # SGE project
+#         n_workers=config["dask"]["cpu_worker_config"]["num_workers"],
+#         cores=config["dask"]["cpu_worker_config"]["cores"],
+#         queue=config["dask"]["cpu_worker_config"]["queue"],
+#         processes=config["dask"]["cpu_worker_config"]["processes"],
 
-        # Common params
-        runtime=config["dask"].get("runtime", "1400000"),
-        dashboard_port=config["dask"]["dashboard_port"],
-        worker_timeout=config["dask"].get("worker_timeout", 600)
+#         # Common params
+#         runtime=config["dask"].get("runtime", "1400000"),
+#         dashboard_port=config["dask"]["dashboard_port"],
+#         worker_timeout=config["dask"].get("worker_timeout", 600)
 
-    conda:
-        "workflow/envs/otls-pipeline.yml"
-    script:
-        "scripts/fix_attenuation.py"
+#     conda:
+#         "workflow/envs/otls-pipeline.yml"
+#     script:
+#         "scripts/fix_attenuation.py"
 
 rule rechunk_to_blocks:
     input:
-        zarr=CORRECTED_ZARR
+        zarr=DESTRIPE_ZARR
     output:
         zarr=maybe_protected(directory(RECHUNKED_BLOCKS_ZARR))
     params:

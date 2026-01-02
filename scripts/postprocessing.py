@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from tifffile import imread
 from skimage.measure import regionprops_table
+from sklearn.mixture import GaussianMixture
 import logging
 import argparse
 import sys
@@ -16,34 +17,25 @@ logger = logging.getLogger(__name__)
 # cell cycle label assignment (FUCCI-Red, FUCCI-Green, FUCCI-Negative, FUCCI-DP) #
 ##################################################################################
 
-def _label_row(row):
+def _label_row(row, thresh_red, thresh_green):
     """
-    Helper function to assign FUCCI class labels to a single row based on normalized intensities.
+    Helper function to assign FUCCI class label to a single row based on GMM thresholds.
     
     Args:
         row: pandas Series
-            A row from the dataframe containing red_int_norm, green_int_norm, and fucci_ratio
+            A row from the dataframe containing Mean_FUCCI_Red_Intensity and Mean_FUCCI_Green_Intensity columns
     
     Returns:
         str: FUCCI class label
     """
-    # handle non-expressors first #
-    if row['red_int_norm'] <= 1 and row['green_int_norm'] <= 1:
-        return 'FUCCI-Negative'
-    # then apply ratio thresholds #
-    elif row['fucci_ratio'] > 1.1:         
-        return 'FUCCI-Green'
-    elif 0.9 <= row['fucci_ratio'] <= 1.1: 
-        return 'FUCCI-Double'   
-    elif row['fucci_ratio'] < 0.9:         
-        return 'FUCCI-Red'
-    else:                                  
-        return np.nan
-
+    if   row.Mean_FUCCI_Red_Intensity > thresh_red and row.Mean_FUCCI_Green_Intensity < thresh_green: return 'Red'    # high red, low green --> red #
+    elif row.Mean_FUCCI_Red_Intensity < thresh_red and row.Mean_FUCCI_Green_Intensity > thresh_green: return 'Green'  # low red, high green --> green #
+    elif row.Mean_FUCCI_Red_Intensity > thresh_red and row.Mean_FUCCI_Green_Intensity > thresh_green: return 'Double' # high red, high green --> double #
+    else: return 'Negative'                                                                                           # low red, low green --> negative #
 
 def assign_class_labels(df):
     """
-    Assign FUCCI class labels to nuclei based on FUCCI-Red and FUCCI-Green intensities.
+    Assign FUCCI class labels to nuclei based on 2-component GMM thresholding.
     
     Args:
         df: pandas DataFrame
@@ -52,18 +44,33 @@ def assign_class_labels(df):
     Returns:
         pandas DataFrame: Input dataframe with added FUCCI_Class column
     """
-    logger.info("Assigning FUCCI class labels...")
-    
-    # generate columns for median-normalized red and green intensities and their ratio #
-    df['red_int_norm'] = df['Mean_FUCCI_Red_Intensity'] / df["Mean_FUCCI_Red_Intensity"].median()
-    df['green_int_norm'] = df['Mean_FUCCI_Green_Intensity'] / df["Mean_FUCCI_Green_Intensity"].median()
-    df['fucci_ratio'] = df['green_int_norm'] / df['red_int_norm']
+    logger.info("Calculating FUCCI class thresholds...")
+
+    # load negative control dataframe, concatenate pos+neg red/green intensities #
+    df_neg = pd.read_csv('/net/beliveau/vol2/instrument/E9.5_300/Zoom_300/300_data_df_numeric_renamed.csv')
+    red_ints_pos = df["Mean_FUCCI_Red_Intensity"].values
+    green_ints_pos = df["Mean_FUCCI_Green_Intensity"].values
+    red_ints_neg = df_neg["Mean_FUCCI_G1_Signal"].values
+    green_ints_neg = df_neg["Mean_FUCCI_SG2_Signal"].values
+    red_ints = np.concatenate([red_ints_pos, red_ints_neg])
+    green_ints = np.concatenate([green_ints_pos, green_ints_neg])
+
+    # fit 2-componentGMM to transformed intensities #
+    GMM_red = GaussianMixture(n_components=2, covariance_type='full', random_state=42)
+    GMM_red.fit(red_ints.reshape(-1, 1))
+    GMM_green = GaussianMixture(n_components=2, covariance_type='full', random_state=42)
+    GMM_green.fit(green_ints.reshape(-1, 1))
+
+    # calculate threshold values as midpoint between means of two components #
+    means_red = GMM_red.means_.flatten()
+    means_green = GMM_green.means_.flatten()
+    thresh_red = (means_red[0] + means_red[1]) / 2
+    thresh_green = (means_green[0] + means_green[1]) / 2
+    logger.info(f"FUCCI class thresholds: Red={thresh_red:.2f}, Green={thresh_green:.2f}")
 
     # assign class labels #
-    df['FUCCI_Class'] = df.apply(_label_row, axis=1)
-
-    # drop intermediate columns #
-    df = df.drop(columns=['red_int_norm', 'green_int_norm', 'fucci_ratio'])
+    logger.info("Assigning FUCCI class labels...")
+    df['FUCCI_Class'] = df.apply(lambda row: _label_row(row, thresh_red, thresh_green), axis=1)
 
     # move "FUCCI_Class" column before shcoeffs columns #
     shcoeff_cols = [col for col in df.columns if col.startswith("shcoeffs")]
